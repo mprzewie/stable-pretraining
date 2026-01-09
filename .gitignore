@@ -160,3 +160,4 @@ wandb/
 *.out
 
 ._version.py
+stable_pretraining/_version.py

@@ -17,7 +17,17 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from utils import get_data_dir
 
-simclr_transform = transforms.MultiViewTransform(
+class ProtoCLRModule(nn.Module):
+    def __init__(self, num_prototypes: int, embedding_dim: int, proto_processor: torch.nn.Module = None):
+        super().__init__()
+        self.prototypes = nn.Parameter(torch.randn(num_prototypes, embedding_dim))
+        self.proto_processor = proto_processor or nn.Identity()
+    
+    def forward(self, indices: torch.Tensor) -> torch.Tensor:
+        return self.proto_processor(self.prototypes[indices])
+
+
+protoclr_transform = transforms.MultiViewTransform(
     [
         transforms.Compose(
             transforms.RGB(),
@@ -29,18 +39,76 @@ simclr_transform = transforms.MultiViewTransform(
             transforms.RandomGrayscale(p=0.2),
             transforms.ToImage(**spt.data.static.CIFAR10),
         ),
-        transforms.Compose(
-            transforms.RGB(),
-            transforms.RandomResizedCrop((32, 32)),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(
-                brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.8
-            ),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.ToImage(**spt.data.static.CIFAR10),
-        ),
+        # transforms.Compose(
+        #     transforms.RGB(),
+        #     transforms.RandomResizedCrop((32, 32)),
+        #     transforms.RandomHorizontalFlip(p=0.5),
+        #     transforms.ColorJitter(
+        #         brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1, p=0.8
+        #     ),
+        #     transforms.RandomGrayscale(p=0.2),
+        #     transforms.ToImage(**spt.data.static.CIFAR10),
+        # ),
     ]
 )
+
+def protoclr_forward(self, batch, stage: str):
+    """
+    Args:
+        self: Module instance (automatically bound) with required attributes:
+            - backbone: Feature extraction network
+            - projector: Projection head mapping features to latent space
+            - simclr_loss: NT-Xent contrastive loss function
+            - protoclr: ProtoCLRModule instance for prototype handling
+        batch: Either a list of view dicts (from MultiViewTransform) or
+            a single dict (for validation/single-view)
+        stage: Training stage ('train', 'val', or 'test')
+
+    Returns:
+        Dictionary containing:
+            - 'embedding': Feature representations from backbone
+            - 'loss': NT-Xent contrastive loss (during training only)
+            - 'label': Labels if present (for probes/callbacks)
+
+    Note:
+        Introduced in the SimCLR paper :cite:`chen2020simple`.
+    """
+    out = {}
+
+    views = forward._get_views_list(batch)
+    if views is not None:
+        if len(views) != 1:
+            raise ValueError(
+                f"ProtoCLR requires exactly 1 view, got {len(views)}. "
+                "For other configurations, please implement a custom forward function."
+            )
+        embeddings = [self.backbone(view["image"]) for view in views]
+        out["embedding"] = torch.cat(embeddings, dim=0)
+
+
+        # Concatenate labels for callbacks (probes need this)
+        if "label" in views[0]:
+            out["label"] = torch.cat([view["label"] for view in views], dim=0)
+
+        if self.training:
+            projections = [self.projector(emb) for emb in embeddings]
+            proto_embeddings = [self.protoclr(view["sample_idx"]) for view in views]
+
+            out["loss"] = self.simclr_loss(projections[0], proto_embeddings[0])
+            self.log(
+                f"{stage}/loss",
+                out["loss"],
+                on_step=True,
+                on_epoch=True,
+                sync_dist=True,
+            )
+    else:
+        # Single-view validation
+        out["embedding"] = self.backbone(batch["image"])
+        if "label" in batch:
+            out["label"] = batch["label"]
+
+    return out
 
 val_transform = transforms.Compose(
     transforms.RGB(),
@@ -57,7 +125,7 @@ cifar_val = torchvision.datasets.CIFAR10(root=str(data_dir), train=False, downlo
 train_dataset = spt.data.FromTorchDataset(
     cifar_train,
     names=["image", "label"],
-    transform=simclr_transform,
+    transform=protoclr_transform,
 )
 val_dataset = spt.data.FromTorchDataset(
     cifar_val,
@@ -96,10 +164,13 @@ projector = nn.Sequential(
     nn.Linear(2048, 256),
 )
 
+protoclr = ProtoCLRModule(num_prototypes=len(train_dataset), embedding_dim=256)
+
 module = spt.Module(
     backbone=backbone,
     projector=projector,
-    forward=forward.simclr_forward,
+    forward=protoclr_forward,
+    protoclr=protoclr,
     simclr_loss=spt.losses.NTXEntLoss(temperature=0.5),
     optim={
         "optimizer": {
@@ -138,7 +209,7 @@ knn_probe = spt.callbacks.OnlineKNN(
 )
 
 wandb_logger = WandbLogger(
-    group="simclr-resnet18-cifar10",
+    group="protoclr-resnet18-cifar10",
     entity="mprzewie",
     project="spt-prototypes",
     log_model=False,
@@ -154,8 +225,8 @@ trainer = pl.Trainer(
     precision="16-mixed",
     logger=wandb_logger,
     enable_checkpointing=False,
-    default_root_dir="outputs/simclr-resnet18-cifar10",
+    default_root_dir="outputs/protoclr-resnet18-cifar10",
 )
 
-manager = spt.Manager(trainer=trainer, module=module, data=data, ckpt_path="outputs/simclr-resnet18-cifar10")
+manager = spt.Manager(trainer=trainer, module=module, data=data)
 manager()
