@@ -269,7 +269,7 @@ class InfoNCELoss(torch.nn.Module):
         self,
         anchors: torch.Tensor,
         candidates: torch.Tensor,
-        targets: torch.Tensor,
+        targets: torch.Tensor = None,
         mask: Optional[torch.Tensor] = None,
         logit_scale: Optional[torch.Tensor | float] = None,
     ) -> torch.Tensor:
@@ -290,6 +290,7 @@ class InfoNCELoss(torch.nn.Module):
         Returns:
             torch.Tensor: A scalar loss value.
         """
+        targets = targets or torch.arange(anchors.size(0), device=anchors.device)
         return self._compute(anchors, candidates, targets, mask, logit_scale)
 
 
