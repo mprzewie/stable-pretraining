@@ -14,8 +14,20 @@ from stable_pretraining.data import transforms
 import sys
 from pathlib import Path
 
+import os 
 sys.path.append(str(Path(__file__).parent.parent))
 from utils import get_data_dir
+
+
+def worker_init_fn(worker_id):
+    # Set CPU affinity when available (Linux); noop on macOS/others
+    if hasattr(os, "sched_setaffinity"):
+        try:
+            n_cpus = os.cpu_count() or 1
+            os.sched_setaffinity(0, range(n_cpus)) # pyright: ignore[reportAttributeAccessIssue]
+        except Exception:
+            pass
+
 
 simclr_transform = transforms.MultiViewTransform(
     [
@@ -71,12 +83,16 @@ train_dataloader = torch.utils.data.DataLoader(
     num_workers=8,
     drop_last=True,
     shuffle=True,
+    worker_init_fn=worker_init_fn,
 )
+
 val_dataloader = torch.utils.data.DataLoader(
     dataset=val_dataset,
     batch_size=256,
     num_workers=10,
+    worker_init_fn=worker_init_fn,
 )
+
 
 data = spt.data.DataModule(train=train_dataloader, val=val_dataloader)
 
