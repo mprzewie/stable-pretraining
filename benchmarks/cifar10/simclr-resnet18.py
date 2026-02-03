@@ -29,6 +29,8 @@ def worker_init_fn(worker_id):
             pass
 
 
+suffix = ""
+
 simclr_transform = transforms.MultiViewTransform(
     [
         transforms.Compose(
@@ -53,6 +55,20 @@ simclr_transform = transforms.MultiViewTransform(
         ),
     ]
 )
+
+simclr_transform = transforms.MultiViewTransform(
+    [
+        transforms.Compose(
+            transforms.RGB(),
+            transforms.ToImage(**spt.data.static.CIFAR10),
+        ),
+        transforms.Compose(
+            transforms.RGB(),
+            transforms.ToImage(**spt.data.static.CIFAR10),
+        ),
+    ]
+)
+suffix = f"{suffix}-noaug"
 
 val_transform = transforms.Compose(
     transforms.RGB(),
@@ -112,6 +128,10 @@ projector = nn.Sequential(
     nn.Linear(2048, 256),
 )
 
+# projector = nn.Identity()
+# suffix = f"{suffix}-no-proj"
+
+
 module = spt.Module(
     backbone=backbone,
     projector=projector,
@@ -153,8 +173,11 @@ knn_probe = spt.callbacks.OnlineKNN(
     k=10,
 )
 
+exp_name = f"simclr-resnet18-cifar10{suffix}"
+
+
 wandb_logger = WandbLogger(
-    group="simclr-resnet18-cifar10",
+    group=exp_name,
     entity="mprzewie",
     project="spt-prototypes",
     log_model=False,
@@ -170,8 +193,8 @@ trainer = pl.Trainer(
     precision="16-mixed",
     logger=wandb_logger,
     enable_checkpointing=False,
-    default_root_dir="outputs/simclr-resnet18-cifar10",
+    # default_root_dir=f"outputs/{exp_name}",
 )
 
-manager = spt.Manager(trainer=trainer, module=module, data=data, ckpt_path="outputs/simclr-resnet18-cifar10")
+manager = spt.Manager(trainer=trainer, module=module, data=data, ckpt_path=f"outputs/{exp_name}")
 manager()

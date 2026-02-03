@@ -16,6 +16,7 @@ from .joint_embedding import (
     VICRegLoss,
     BarlowTwinsLoss,
     NTXEntLoss,
+    InfoNCELoss,
 )
 
 # Multimodal losses
@@ -41,6 +42,7 @@ __all__ = [
     "VICRegLoss",
     "BarlowTwinsLoss",
     "NTXEntLoss",
+    "InfoNCELoss",
     "CLIPLoss",
     # Reconstruction
     "mae",
