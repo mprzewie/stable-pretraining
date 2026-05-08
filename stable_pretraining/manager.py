@@ -1732,11 +1732,8 @@ class Manager(submitit.helpers.Checkpointable):
         # exit — log what we ended up with so a downstream handler change is
         # immediately visible in the run log.
         print_signal_info("after Trainer.fit() returned")
-        if (
-            getattr(self._trainer, "_signal_connector", None) is not None
-            and getattr(
-                self._trainer._signal_connector, "received_sigterm", False
-            )
+        if getattr(self._trainer, "_signal_connector", None) is not None and getattr(
+            self._trainer._signal_connector, "received_sigterm", False
         ):
             logging.warning(
                 "  ⚠ Trainer reports received_sigterm=True — fit() exited "

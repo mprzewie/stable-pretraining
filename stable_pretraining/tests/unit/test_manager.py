@@ -387,8 +387,7 @@ class TestSIGTERMPreemptHandler:
     def test_handler_raises_sigterm_exception_when_kill_fails(
         self, monkeypatch: pytest.MonkeyPatch, restore_sigterm
     ):
-        """If os.kill fails, the handler must surface a SIGTERMException
-        (the typed fallback) instead of silently swallowing the SIGTERM."""
+        """If os.kill fails, the handler surfaces SIGTERMException (typed fallback)."""
         monkeypatch.setenv("SLURM_JOB_ID", "12345")
 
         def _broken_kill(pid, sig):
@@ -406,8 +405,7 @@ class TestSIGTERMPreemptHandler:
     def test_handler_honors_submitit_preempt_signal_env(
         self, monkeypatch: pytest.MonkeyPatch, restore_sigterm
     ):
-        """`$SUBMITIT_PREEMPT_SIGNAL=USR1` should make our handler forward to
-        SIGUSR1 instead of SIGUSR2 (matches submitit's USR_SIG resolution)."""
+        """`$SUBMITIT_PREEMPT_SIGNAL=USR1` should make us forward to SIGUSR1, not SIGUSR2."""
         monkeypatch.setenv("SLURM_JOB_ID", "12345")
         monkeypatch.setenv("SUBMITIT_PREEMPT_SIGNAL", "USR1")
         # Force submitit's class attribute to re-read the env var. submitit
@@ -430,12 +428,7 @@ class TestSIGTERMPreemptHandler:
         assert kills == [(os.getpid(), int(signal.SIGUSR1))]
 
     def test_end_to_end_sigterm_triggers_usr_handler(self, tmp_path: Path):
-        """Subprocess test: real SIGTERM → our handler → real SIGUSR2 →
-        a sentinel handler we install upstream (mimicking submitit).
-
-        Done in a subprocess so we don't have to worry about leaking process-
-        wide signal handlers into pytest's runner or other tests.
-        """
+        """End-to-end (subprocess): real SIGTERM → our handler → real SIGUSR2 → sentinel."""
         marker = tmp_path / "usr_fired.txt"
         script = textwrap.dedent(f"""
             import os, signal, sys, time
@@ -486,8 +479,7 @@ class TestSIGTERMPreemptHandler:
         restore_sigterm,
         caplog: pytest.LogCaptureFixture,
     ):
-        """If submitit hasn't installed its USR-sig handler yet, the install
-        function must warn that requeue won't happen on SIGTERM."""
+        """Install must warn when USR-sig has no handler bound (requeue would no-op)."""
         monkeypatch.setenv("SLURM_JOB_ID", "12345")
         # Force USR2 to SIG_DFL so the "no callable handler" branch fires.
         signal.signal(signal.SIGUSR2, signal.SIG_DFL)
@@ -550,9 +542,7 @@ class TestDescribeHandler:
 
 @pytest.mark.unit
 class TestPrintSignalInfo:
-    """Sanity check that print_signal_info accepts an optional label and is
-    callable in both the bare and labeled forms (matches its two call sites
-    inside Manager.__call__)."""
+    """Sanity-check that `print_signal_info` accepts both bare and labeled call forms."""
 
     def test_no_label(self):
         # Should not raise.
