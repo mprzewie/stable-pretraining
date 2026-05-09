@@ -22,7 +22,7 @@ from .joint_embedding import (
 from .multimodal import CLIPLoss
 
 # Reconstruction losses
-from .reconstruction import mae
+from .reconstruction import mae, MAELoss
 
 # Utilities
 from .utils import (
@@ -45,6 +45,7 @@ __all__ = [
     "CLIPLoss",
     # Reconstruction
     "mae",
+    "MAELoss",
     # Utils
     "sinkhorn_knopp",
     "off_diagonal",

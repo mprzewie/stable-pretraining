@@ -3,7 +3,7 @@ import torch
 import dataclasses
 import collections
 import sys
-from stable_pretraining.utils import detach_tensors
+from stable_pretraining.callbacks.utils import detach_tensors
 from typing import NamedTuple
 from dataclasses import dataclass
 
