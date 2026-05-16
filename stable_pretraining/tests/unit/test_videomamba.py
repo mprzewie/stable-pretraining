@@ -26,6 +26,8 @@ from stable_pretraining.backbone.video import (
 
 @pytest.mark.unit
 class TestMambaSSMBlock:
+    """Tests for the pure-PyTorch Mamba S6 block."""
+
     def test_shape(self):
         m = MambaSSMBlock(d_model=16, d_state=8, d_conv=4, expand=2)
         x = torch.randn(2, 12, 16)
@@ -33,6 +35,7 @@ class TestMambaSSMBlock:
 
     def test_strict_causality(self):
         """S6 with forward scan + causal 1D conv must be strictly causal.
+
         Perturbing token ``i > k`` cannot affect token ``<= k``.
         """
         torch.manual_seed(0)
@@ -59,6 +62,8 @@ class TestMambaSSMBlock:
 
 @pytest.mark.unit
 class TestVideoMambaBlocks:
+    """Tests for the video-level Mamba block wrappers (causal / bidirectional)."""
+
     def test_causal_block_shape_and_causality(self):
         torch.manual_seed(0)
         blk = CausalMambaBlock(d_model=16).eval()
@@ -73,8 +78,10 @@ class TestVideoMambaBlocks:
         assert torch.allclose(y[:, :5], y2[:, :5], atol=1e-5)
 
     def test_bi_block_not_causal(self):
-        """BiMambaBlock fuses forward + backward scans → outputs at the
-        prefix depend on the suffix, so it is NOT causal by design.
+        """BiMambaBlock fuses forward + backward scans.
+
+        Outputs at the prefix depend on the suffix, so it is NOT causal
+        by design.
         """
         torch.manual_seed(0)
         blk = BiMambaBlock(d_model=16).eval()
@@ -93,6 +100,8 @@ class TestVideoMambaBlocks:
 
 @pytest.mark.unit
 class TestVideoMamba:
+    """Tests for the full :class:`VideoMamba` encoder."""
+
     @pytest.fixture(scope="class")
     def small_model(self):
         torch.manual_seed(0)
@@ -128,8 +137,10 @@ class TestVideoMamba:
             assert p.grad is not None
 
     def test_no_future_leakage_causal(self, small_model):
-        """Causal VideoMamba: perturbing input frame ``t > k`` must leave
-        the output feature-map slice at frames ``[0, k]`` bit-identical.
+        """Causal VideoMamba leaves the prefix bit-identical under suffix perturbation.
+
+        Perturbing input frame ``t > k`` must leave the output feature-map
+        slice at frames ``[0, k]`` unchanged.
 
         Using the 5D ``feature_map`` view, this becomes a clean check on
         the temporal axis (axis 2) — independent of the underlying token
@@ -250,6 +261,8 @@ class TestVideoMamba:
 
 @pytest.mark.unit
 class TestFactories:
+    """Smoke tests for the named VideoMamba factory presets."""
+
     @pytest.mark.parametrize(
         "factory,causal,min_params,max_params",
         [

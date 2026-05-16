@@ -54,6 +54,8 @@ class TestSTLSTMCell:
 
 @pytest.mark.unit
 class TestGHU:
+    """Tests for the :class:`GHU` (Gradient Highway Unit)."""
+
     def test_shape(self):
         ghu = GHU(channels=8, kernel_size=3)
         x = torch.randn(2, 8, 10, 10)
@@ -75,6 +77,8 @@ class TestGHU:
 
 @pytest.mark.unit
 class TestPredRNNv2:
+    """Tests for the full :class:`PredRNNv2` encoder."""
+
     @pytest.fixture(scope="class")
     def small_model(self):
         torch.manual_seed(0)
@@ -112,8 +116,10 @@ class TestPredRNNv2:
             assert p.requires_grad and p.grad is not None
 
     def test_no_future_leakage(self, small_model):
-        """Recurrent → naturally causal. Perturbing input frames at t >= k+1
-        must leave output frames at t <= k untouched, bit-identical.
+        """Recurrent model → naturally causal.
+
+        Perturbing input frames at ``t >= k+1`` must leave output frames at
+        ``t <= k`` untouched, bit-identical.
         """
         torch.manual_seed(0)
         small_model.eval()
@@ -190,6 +196,8 @@ class TestPredRNNv2:
 
 @pytest.mark.unit
 class TestFactories:
+    """Smoke tests for the named PredRNN-v2 factory presets."""
+
     @pytest.mark.parametrize(
         "factory,min_params,max_params",
         [
