@@ -190,7 +190,7 @@ class OnlineQueue(Callback):
         self, trainer: Trainer, pl_module: LightningModule
     ) -> None:
         """Create snapshot of the requested portion of queue contents."""
-        logging.info(
+        logging.debug(
             f"  creating snapshot for key '{self.key}' "
             f"(requesting {self.requested_length} from queue of size {self.actual_queue_length})"
         )
@@ -202,23 +202,25 @@ class OnlineQueue(Callback):
         if len(full_queue_data) > self.requested_length:
             # Get the last N items (most recent)
             tensor = full_queue_data[-self.requested_length :]
-            logging.info(
+            logging.debug(
                 f"  extracted last {self.requested_length} items from {len(full_queue_data)} available"
             )
         else:
             tensor = full_queue_data
             if len(tensor) < self.requested_length:
-                logging.info(
+                logging.debug(
                     f"  queue not full yet: {len(tensor)}/{self.requested_length} items"
                 )
 
         if self.gather_distributed and trainer.world_size > 1:
             gathered = pl_module.all_gather(tensor).flatten(0, 1)
             self._snapshot = gathered
-            logging.info(f"  {self.key}: {tensor.shape} -> {gathered.shape} (gathered)")
+            logging.debug(
+                f"  {self.key}: {tensor.shape} -> {gathered.shape} (gathered)"
+            )
         else:
             self._snapshot = tensor
-            logging.info(f"  {self.key}: {tensor.shape}")
+            logging.debug(f"  {self.key}: {tensor.shape}")
 
     def on_validation_epoch_end(
         self, trainer: Trainer, pl_module: LightningModule
