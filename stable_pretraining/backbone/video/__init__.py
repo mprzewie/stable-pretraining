@@ -11,6 +11,20 @@ The naming convention for factory functions mirrors the ViT family
 """
 
 from .causal_conv3d import CausalConv3d
+from .cosmos import (
+    CosmosCausalTemporalAttention,
+    CosmosEncoder,
+    CosmosOutput,
+    CosmosSpatialAttention,
+    cosmos_tiny,
+    cosmos_small,
+    cosmos_base,
+    cosmos_large,
+    cosmos_huge,
+    cosmos_giant,
+    cosmos_gigantic,
+)
+from .norms import GroupNormPerFrame
 from .magvit2 import (
     MAGVIT2Encoder,
     MAGVIT2Output,
@@ -36,6 +50,18 @@ from .predrnn import (
 
 __all__ = [
     "CausalConv3d",
+    "CosmosCausalTemporalAttention",
+    "CosmosEncoder",
+    "CosmosOutput",
+    "CosmosSpatialAttention",
+    "GroupNormPerFrame",
+    "cosmos_tiny",
+    "cosmos_small",
+    "cosmos_base",
+    "cosmos_large",
+    "cosmos_huge",
+    "cosmos_giant",
+    "cosmos_gigantic",
     "MAGVIT2Encoder",
     "MAGVIT2Output",
     "magvit2_tiny",

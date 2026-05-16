@@ -53,31 +53,7 @@ import torch.utils.checkpoint as ckpt
 from transformers.utils import ModelOutput
 
 from .causal_conv3d import CausalConv3d
-
-
-class _GroupNormPerFrame(nn.GroupNorm):
-    """``GroupNorm`` whose statistics are computed independently per temporal frame.
-
-    Standard ``nn.GroupNorm`` on a 5D input pools statistics across the
-    ``(T, H, W)`` axes, which lets a perturbation at frame ``t=k+1`` shift
-    the mean/variance used to normalize frame ``t=0`` — i.e. it breaks
-    temporal causality even when the surrounding convolutions are causal.
-
-    Computing the statistics per frame fixes this and is the standard pattern
-    used by every modern causal video VAE (Wan-VAE, Cosmos Tokenizer,
-    Stable Video Diffusion's causal 3D VAE). On 4D inputs this layer behaves
-    identically to ``nn.GroupNorm``.
-    """
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.ndim != 5:
-            return super().forward(x)
-        b, c, t, h, w = x.shape
-        # (B, C, T, H, W) → (B, T, C, H, W) → (B*T, C, H, W)
-        x = x.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
-        x = super().forward(x)
-        x = x.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4).contiguous()
-        return x
+from .norms import GroupNormPerFrame, _fit_groups
 
 
 @dataclass
@@ -108,16 +84,12 @@ class _ResBlock3D(nn.Module):
         groups: int = 32,
     ):
         super().__init__()
-        g_in = min(groups, in_channels)
-        while in_channels % g_in != 0:
-            g_in -= 1
-        g_out = min(groups, out_channels)
-        while out_channels % g_out != 0:
-            g_out -= 1
+        g_in = _fit_groups(groups, in_channels)
+        g_out = _fit_groups(groups, out_channels)
 
-        self.norm1 = _GroupNormPerFrame(g_in, in_channels)
+        self.norm1 = GroupNormPerFrame(g_in, in_channels)
         self.conv1 = CausalConv3d(in_channels, out_channels, kernel_size=kernel_size)
-        self.norm2 = _GroupNormPerFrame(g_out, out_channels)
+        self.norm2 = GroupNormPerFrame(g_out, out_channels)
         self.conv2 = CausalConv3d(out_channels, out_channels, kernel_size=kernel_size)
         self.act = nn.SiLU(inplace=False)
 
@@ -257,10 +229,8 @@ class MAGVIT2Encoder(nn.Module):
             prev_ch = ch
 
         out_ch = stage_channels[-1]
-        g_out = min(groups, out_ch)
-        while out_ch % g_out != 0:
-            g_out -= 1
-        self.norm_out = _GroupNormPerFrame(g_out, out_ch)
+        g_out = _fit_groups(groups, out_ch)
+        self.norm_out = GroupNormPerFrame(g_out, out_ch)
         self.act_out = nn.SiLU(inplace=False)
         self.proj_out = CausalConv3d(out_ch, latent_dim, kernel_size=1)
 
