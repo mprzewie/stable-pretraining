@@ -33,7 +33,8 @@ class TestMambaSSMBlock:
 
     def test_strict_causality(self):
         """S6 with forward scan + causal 1D conv must be strictly causal.
-        Perturbing token ``i > k`` cannot affect token ``<= k``."""
+        Perturbing token ``i > k`` cannot affect token ``<= k``.
+        """
         torch.manual_seed(0)
         m = MambaSSMBlock(d_model=16, d_state=8, d_conv=4, expand=2).eval()
         x_a = torch.randn(1, 16, 16)
@@ -73,7 +74,8 @@ class TestVideoMambaBlocks:
 
     def test_bi_block_not_causal(self):
         """BiMambaBlock fuses forward + backward scans → outputs at the
-        prefix depend on the suffix, so it is NOT causal by design."""
+        prefix depend on the suffix, so it is NOT causal by design.
+        """
         torch.manual_seed(0)
         blk = BiMambaBlock(d_model=16).eval()
         x = torch.randn(1, 10, 16)
@@ -209,7 +211,9 @@ class TestVideoMamba:
 
     def test_patch_divisibility_error(self):
         with pytest.raises(ValueError, match="must divide"):
-            VideoMamba(img_size=16, num_frames=3, patch_size=(2, 8, 8), embed_dim=8, depth=1)
+            VideoMamba(
+                img_size=16, num_frames=3, patch_size=(2, 8, 8), embed_dim=8, depth=1
+            )
 
     def test_checkpoint_parity(self):
         torch.manual_seed(0)
@@ -255,9 +259,7 @@ class TestFactories:
     )
     def test_param_count_in_range(self, factory, causal, min_params, max_params):
         # Use a small grid so factory call is cheap; depth matters for params.
-        m = factory(
-            img_size=32, num_frames=4, patch_size=(1, 16, 16), causal=causal
-        )
+        m = factory(img_size=32, num_frames=4, patch_size=(1, 16, 16), causal=causal)
         n = sum(p.numel() for p in m.parameters())
         assert min_params < n < max_params, (
             f"{factory.__name__}: got {n / 1e6:.1f}M params, "

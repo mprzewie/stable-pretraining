@@ -39,7 +39,7 @@ Example::
     x = torch.randn(2, 3, 16, 256, 256)
     out = enc(x)
     out.feature_map.shape  # (2, 16, 4, 16, 16) — 4× temporal, 16× spatial
-    out.pooled.shape       # (2, 16)
+    out.pooled.shape  # (2, 16)
 """
 
 from __future__ import annotations
@@ -106,14 +106,13 @@ class _ResBlock3D(nn.Module):
 
 class _Downsample(nn.Module):
     """Strided causal 3D conv. Stride is ``(st, 2, 2)`` so spatial halves; ``st``
-    is 1 (no temporal downsample) or 2 (also halve time)."""
+    is 1 (no temporal downsample) or 2 (also halve time).
+    """
 
     def __init__(self, channels: int, temporal: bool):
         super().__init__()
         st = 2 if temporal else 1
-        self.conv = CausalConv3d(
-            channels, channels, kernel_size=3, stride=(st, 2, 2)
-        )
+        self.conv = CausalConv3d(channels, channels, kernel_size=3, stride=(st, 2, 2))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.conv(x)
@@ -121,7 +120,8 @@ class _Downsample(nn.Module):
 
 class _Stage(nn.Module):
     """A MAGVIT-v2 encoder stage: ``n_res_blocks`` residual blocks then an
-    optional downsample."""
+    optional downsample.
+    """
 
     def __init__(
         self,
@@ -263,16 +263,12 @@ class MAGVIT2Encoder(nn.Module):
 
 def magvit2_tiny(**kwargs) -> MAGVIT2Encoder:
     """MAGVIT-v2 Tiny. ``base_channels=32, n_res_blocks=2`` (~5M params)."""
-    return MAGVIT2Encoder(
-        base_channels=32, n_res_blocks=2, latent_dim=8, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=32, n_res_blocks=2, latent_dim=8, **kwargs)
 
 
 def magvit2_small(**kwargs) -> MAGVIT2Encoder:
     """MAGVIT-v2 Small. ``base_channels=64, n_res_blocks=2`` (~20M params)."""
-    return MAGVIT2Encoder(
-        base_channels=64, n_res_blocks=2, latent_dim=16, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=64, n_res_blocks=2, latent_dim=16, **kwargs)
 
 
 def magvit2_base(**kwargs) -> MAGVIT2Encoder:
@@ -280,23 +276,17 @@ def magvit2_base(**kwargs) -> MAGVIT2Encoder:
 
     Closest to the original paper's reference configuration.
     """
-    return MAGVIT2Encoder(
-        base_channels=128, n_res_blocks=2, latent_dim=16, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=128, n_res_blocks=2, latent_dim=16, **kwargs)
 
 
 def magvit2_large(**kwargs) -> MAGVIT2Encoder:
     """MAGVIT-v2 Large. ``base_channels=192, n_res_blocks=3`` (~180M params)."""
-    return MAGVIT2Encoder(
-        base_channels=192, n_res_blocks=3, latent_dim=32, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=192, n_res_blocks=3, latent_dim=32, **kwargs)
 
 
 def magvit2_huge(**kwargs) -> MAGVIT2Encoder:
     """MAGVIT-v2 Huge. ``base_channels=256, n_res_blocks=4`` (~370M params)."""
-    return MAGVIT2Encoder(
-        base_channels=256, n_res_blocks=4, latent_dim=32, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=256, n_res_blocks=4, latent_dim=32, **kwargs)
 
 
 def magvit2_giant(**kwargs) -> MAGVIT2Encoder:
@@ -304,9 +294,7 @@ def magvit2_giant(**kwargs) -> MAGVIT2Encoder:
 
     Scaling experiment territory — no published reference at this size.
     """
-    return MAGVIT2Encoder(
-        base_channels=384, n_res_blocks=4, latent_dim=64, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=384, n_res_blocks=4, latent_dim=64, **kwargs)
 
 
 def magvit2_gigantic(**kwargs) -> MAGVIT2Encoder:
@@ -314,6 +302,4 @@ def magvit2_gigantic(**kwargs) -> MAGVIT2Encoder:
 
     Scaling experiment territory — no published reference at this size.
     """
-    return MAGVIT2Encoder(
-        base_channels=512, n_res_blocks=6, latent_dim=64, **kwargs
-    )
+    return MAGVIT2Encoder(base_channels=512, n_res_blocks=6, latent_dim=64, **kwargs)

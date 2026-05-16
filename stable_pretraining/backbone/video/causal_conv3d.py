@@ -54,7 +54,7 @@ class CausalConv3d(nn.Module):
 
         conv = CausalConv3d(64, 128, kernel_size=(3, 3, 3))
         x = torch.randn(2, 64, 16, 32, 32)
-        y = conv(x)                       # (2, 128, 16, 32, 32)
+        y = conv(x)  # (2, 128, 16, 32, 32)
         # Perturbing x[:, :, k+1:] leaves y[:, :, :k+1] unchanged.
     """
 

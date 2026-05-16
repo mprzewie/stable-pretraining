@@ -29,7 +29,8 @@ class TestCosmosSpatialAttention:
 
     def test_per_frame_isolation(self):
         """Spatial attention is per-frame — perturbing frame t should not
-        change the output at any other frame t' != t."""
+        change the output at any other frame t' != t.
+        """
         torch.manual_seed(0)
         attn = CosmosSpatialAttention(channels=16, num_heads=4).eval()
         x_a = torch.randn(1, 16, 6, 4, 4)
@@ -58,7 +59,8 @@ class TestCosmosCausalTemporalAttention:
 
     def test_no_future_leakage(self):
         """The defining property: perturbing frame ``t > k`` cannot change
-        the output at frame ``<= k``."""
+        the output at frame ``<= k``.
+        """
         torch.manual_seed(0)
         attn = CosmosCausalTemporalAttention(channels=16, num_heads=4).eval()
         x_a = torch.randn(1, 16, 8, 4, 4)

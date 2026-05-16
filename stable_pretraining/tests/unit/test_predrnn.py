@@ -111,7 +111,8 @@ class TestPredRNNv2:
 
     def test_no_future_leakage(self, small_model):
         """Recurrent → naturally causal. Perturbing input frames at t >= k+1
-        must leave output frames at t <= k untouched, bit-identical."""
+        must leave output frames at t <= k untouched, bit-identical.
+        """
         torch.manual_seed(0)
         small_model.eval()
         x_a = torch.randn(1, 3, 6, 16, 16)
@@ -165,9 +166,7 @@ class TestPredRNNv2:
     def test_checkpoint_parity(self):
         """Activation checkpointing must not change the forward output."""
         torch.manual_seed(0)
-        m_ref = PredRNNv2(
-            hidden_channels=8, num_layers=2, num_frames=4, use_ghu=False
-        )
+        m_ref = PredRNNv2(hidden_channels=8, num_layers=2, num_frames=4, use_ghu=False)
         m_ckpt = PredRNNv2(
             hidden_channels=8,
             num_layers=2,

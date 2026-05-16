@@ -37,7 +37,8 @@ class TestCausalConv3d:
 
     def test_no_future_leakage(self):
         """Perturbing frame ``t = k+1`` and onward must not change output at
-        ``t <= k``. This is the defining property of a causal conv."""
+        ``t <= k``. This is the defining property of a causal conv.
+        """
         torch.manual_seed(0)
         conv = CausalConv3d(3, 5, kernel_size=3)
         T = 10
@@ -141,11 +142,10 @@ class TestMAGVIT2Encoder:
 
     def test_checkpoint_parity(self):
         """Activation checkpointing must not change the forward output (only
-        the memory profile)."""
+        the memory profile).
+        """
         torch.manual_seed(0)
-        m_ref = MAGVIT2Encoder(
-            base_channels=16, n_res_blocks=1, latent_dim=8, groups=8
-        )
+        m_ref = MAGVIT2Encoder(base_channels=16, n_res_blocks=1, latent_dim=8, groups=8)
         m_ckpt = MAGVIT2Encoder(
             base_channels=16,
             n_res_blocks=1,

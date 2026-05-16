@@ -75,7 +75,8 @@ def count_parameters(model: nn.Module, trainable_only: bool = True) -> int:
 
 def _meta_param_count(factory: Callable[..., nn.Module], **kwargs) -> int:
     """Instantiate ``factory(**kwargs)`` on ``torch.device('meta')`` and return
-    the total parameter count without allocating real memory."""
+    the total parameter count without allocating real memory.
+    """
     with torch.device("meta"):
         m = factory(**kwargs)
     return sum(p.numel() for p in m.parameters())

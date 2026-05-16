@@ -50,8 +50,8 @@ Example::
 
     enc = predrnn_v2_base(num_frames=16)
     out = enc(torch.randn(2, 3, 16, 64, 64))
-    out.feature_map.shape   # (2, 128, 16, 64, 64)
-    out.pooled.shape        # (2, 128)
+    out.feature_map.shape  # (2, 128, 16, 64, 64)
+    out.pooled.shape  # (2, 128)
 """
 
 from __future__ import annotations
@@ -276,7 +276,10 @@ class PredRNNv2(nn.Module):
             self.patch_embed = nn.Conv2d(in_channels, hidden_channels, 1)
 
         self.cells = nn.ModuleList(
-            [STLSTMCell(hidden_channels, hidden_channels, kernel_size) for _ in range(num_layers)]
+            [
+                STLSTMCell(hidden_channels, hidden_channels, kernel_size)
+                for _ in range(num_layers)
+            ]
         )
         self.ghu = GHU(hidden_channels, kernel_size) if use_ghu else None
 
@@ -287,7 +290,13 @@ class PredRNNv2(nn.Module):
         c: List[torch.Tensor],
         m: torch.Tensor,
         z: Optional[torch.Tensor],
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
+    ) -> Tuple[
+        List[torch.Tensor],
+        List[torch.Tensor],
+        torch.Tensor,
+        Optional[torch.Tensor],
+        torch.Tensor,
+    ]:
         """Advance all layers one time step.
 
         Returns updated ``(h, c, m, z, decouple_acc)``. ``decouple_acc`` is
@@ -375,9 +384,7 @@ class PredRNNv2(nn.Module):
 
         feature_map = torch.stack(outputs, dim=2)  # (B, hidden, T, H', W')
 
-        pooled = (
-            feature_map.mean(dim=(2, 3, 4)) if self.global_pool == "avg" else None
-        )
+        pooled = feature_map.mean(dim=(2, 3, 4)) if self.global_pool == "avg" else None
 
         return PredRNNv2Output(
             feature_map=feature_map, pooled=pooled, decouple_loss=decouple_loss

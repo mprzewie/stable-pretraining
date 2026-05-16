@@ -44,7 +44,7 @@ Example::
     x = torch.randn(2, 3, 16, 256, 256)
     out = enc(x)
     out.feature_map.shape  # (2, 16, 4, 16, 16) — 4× temporal, 16× spatial
-    out.pooled.shape       # (2, 16)
+    out.pooled.shape  # (2, 16)
 """
 
 from __future__ import annotations

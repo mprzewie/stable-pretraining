@@ -44,7 +44,7 @@ Example::
     enc = videomamba_tiny(causal=True, num_frames=16, img_size=224)
     out = enc(torch.randn(2, 3, 16, 224, 224))
     out.feature_map.shape  # (2, num_tokens, 192)
-    out.pooled.shape       # (2, 192)
+    out.pooled.shape  # (2, 192)
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ class MambaSSMBlock(nn.Module):
         # dt_proj lifts the low-rank delta to d_inner with a learned bias
         # whose initialization controls the initial timescale (per Mamba).
         self.dt_proj = nn.Linear(dt_rank, d_inner, bias=True)
-        nn.init.uniform_(self.dt_proj.weight, -dt_rank**-0.5, dt_rank**-0.5)
+        nn.init.uniform_(self.dt_proj.weight, -(dt_rank**-0.5), dt_rank**-0.5)
 
         # A_log is stored in log space; A = -exp(A_log) so eigenvalues are
         # strictly in (-inf, 0), giving a stable continuous-time system.
@@ -204,10 +204,14 @@ class MambaSSMBlock(nn.Module):
 class CausalMambaBlock(nn.Module):
     """Pre-norm Mamba block, causal (forward scan only)."""
 
-    def __init__(self, d_model: int, d_state: int = 16, d_conv: int = 4, expand: int = 2):
+    def __init__(
+        self, d_model: int, d_state: int = 16, d_conv: int = 4, expand: int = 2
+    ):
         super().__init__()
         self.norm = nn.LayerNorm(d_model)
-        self.mamba = MambaSSMBlock(d_model, d_state=d_state, d_conv=d_conv, expand=expand)
+        self.mamba = MambaSSMBlock(
+            d_model, d_state=d_state, d_conv=d_conv, expand=expand
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.mamba(self.norm(x))
@@ -221,11 +225,17 @@ class BiMambaBlock(nn.Module):
     paper for understanding tasks.
     """
 
-    def __init__(self, d_model: int, d_state: int = 16, d_conv: int = 4, expand: int = 2):
+    def __init__(
+        self, d_model: int, d_state: int = 16, d_conv: int = 4, expand: int = 2
+    ):
         super().__init__()
         self.norm = nn.LayerNorm(d_model)
-        self.mamba_fwd = MambaSSMBlock(d_model, d_state=d_state, d_conv=d_conv, expand=expand)
-        self.mamba_bwd = MambaSSMBlock(d_model, d_state=d_state, d_conv=d_conv, expand=expand)
+        self.mamba_fwd = MambaSSMBlock(
+            d_model, d_state=d_state, d_conv=d_conv, expand=expand
+        )
+        self.mamba_bwd = MambaSSMBlock(
+            d_model, d_state=d_state, d_conv=d_conv, expand=expand
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.norm(x)
@@ -417,7 +427,9 @@ class VideoMamba(nn.Module):
         patch_tokens = tokens[:, self.num_prefix :]
         t, h, w = self.grid_size
         feature_map = (
-            patch_tokens.transpose(1, 2).reshape(b, self.embed_dim, t, h, w).contiguous()
+            patch_tokens.transpose(1, 2)
+            .reshape(b, self.embed_dim, t, h, w)
+            .contiguous()
         )
 
         return VideoMambaOutput(feature_map=feature_map, tokens=tokens, pooled=pooled)
