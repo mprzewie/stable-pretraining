@@ -61,6 +61,7 @@ from .vit import (
 )
 
 from .aggregator import TensorAggregator
+from .decoders import CNNImageDecoder, ViTImageDecoder, build_image_decoder
 
 __all__ = [
     MLP,
@@ -117,4 +118,7 @@ __all__ = [
     vit_huge_patch16_224,
     vit_giant_patch14_224,
     vit_gigantic_patch14_224,
+    CNNImageDecoder,
+    ViTImageDecoder,
+    build_image_decoder,
 ]
