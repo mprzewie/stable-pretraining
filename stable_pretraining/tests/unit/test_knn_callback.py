@@ -88,7 +88,9 @@ class TestOnlineKNNNumClasses:
             assert len(warn_msgs) == 1
 
     def test_inference_includes_current_batch_labels(self):
-        """If a class first appears in the current batch (not yet in the queue),
+        """Current-batch labels factor into the inferred width.
+
+        If a class first appears in the current batch (not yet in the queue),
         the inferred width still covers it — important for the typical case
         where validation batches see new classes early in training.
         """
@@ -108,8 +110,10 @@ class TestOnlineKNNNumClasses:
         assert preds.shape == (3, 6)
 
     def test_explicit_num_classes_too_small_raises(self):
-        """If the user passes a num_classes smaller than observed labels,
-        raise a clear error instead of silently producing garbage.
+        """Raise a clear error if ``num_classes`` is below observed labels.
+
+        Better than silently producing garbage predictions for the
+        out-of-range class.
         """
         knn = _make_knn(num_classes=3)  # claims 3 classes
         cached_features = torch.randn(10, 8)
@@ -145,11 +149,12 @@ class TestOnlineKNNNumClasses:
             )
 
     def test_explicit_num_classes_unblocks_metric_with_partial_queue(self):
-        """End-to-end check: the metric that previously crashed (because the
-        queue hadn't seen every class) now works when ``num_classes`` is set.
+        """End-to-end: explicit ``num_classes`` rescues the partial-queue case.
 
-        Using ``MulticlassAccuracy(num_classes=10)`` with a queue containing
-        only 3 classes — pre-fix this raised an IndexError-shape-mismatch.
+        The metric that previously crashed (because the queue hadn't seen
+        every class) now works when ``num_classes`` is set. Using
+        ``MulticlassAccuracy(num_classes=10)`` with a queue containing only
+        3 classes — pre-fix this raised an IndexError-shape-mismatch.
         """
         knn = _make_knn(num_classes=10)
 
@@ -230,8 +235,10 @@ class TestOnlineKNNPredictionCorrectness:
         assert preds.argmax(dim=1).item() == 0
 
     def test_k1_returns_single_neighbour_class(self):
-        """With k=1 the prediction is just the inverse-distance weight at
-        the nearest neighbour's class slot — everything else is zero.
+        """k=1: prediction is the inverse-distance weight at the neighbour's slot.
+
+        Everything else is zero — useful for verifying the weighting math
+        in isolation from the sum-of-weights aggregation.
         """
         knn = self._knn(k=1, temperature=0.07, num_classes=3)
 
@@ -257,10 +264,9 @@ class TestOnlineKNNPredictionCorrectness:
         assert preds[0, 1].item() == pytest.approx(expected_weight, rel=1e-5)
 
     def test_mixed_topk_weighted_vote(self):
-        """When the top-k mixes classes, the winner is the class with the
-        higher inverse-distance sum — not just the count.
+        """Mixed top-k: winner is the class with the higher inverse-distance sum.
 
-        Setup: top-3 neighbours are 2× class 0 at distance 1.0 and 1× class
+        Not just the higher count. Setup: top-3 neighbours are 2× class 0 at distance 1.0 and 1× class
         1 at distance 0.5. Class 1 has the larger inverse-distance weight
         (1/0.57) compared to either single class-0 neighbour (1/1.07), but
         class 0 has TWO contributions:
@@ -309,8 +315,10 @@ class TestOnlineKNNPredictionCorrectness:
         )
 
     def test_batch_of_queries_each_resolved_independently(self):
-        """A batch of queries from different clusters should each be classified
-        according to its own nearest neighbours.
+        """Each query in a batch is classified by its own nearest neighbours.
+
+        A batch with queries near different clusters should produce
+        per-query class assignments, not a single dominant prediction.
         """
         knn = self._knn(k=3, num_classes=2)
 
