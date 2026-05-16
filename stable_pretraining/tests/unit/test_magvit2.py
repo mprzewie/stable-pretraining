@@ -21,6 +21,8 @@ from stable_pretraining.backbone.video import (
 
 @pytest.mark.unit
 class TestCausalConv3d:
+    """Tests for the :class:`CausalConv3d` primitive."""
+
     def test_output_shape_identity_stride(self):
         conv = CausalConv3d(8, 16, kernel_size=3)
         x = torch.randn(2, 8, 7, 12, 12)
@@ -36,8 +38,10 @@ class TestCausalConv3d:
         assert y.shape == (1, 4, 4, 8, 8)
 
     def test_no_future_leakage(self):
-        """Perturbing frame ``t = k+1`` and onward must not change output at
-        ``t <= k``. This is the defining property of a causal conv.
+        """Verify the defining property of a causal conv.
+
+        Perturbing frame ``t = k+1`` and onward must not change output at
+        ``t <= k``.
         """
         torch.manual_seed(0)
         conv = CausalConv3d(3, 5, kernel_size=3)
@@ -67,6 +71,8 @@ class TestCausalConv3d:
 
 @pytest.mark.unit
 class TestMAGVIT2Encoder:
+    """Tests for the full :class:`MAGVIT2Encoder` (shape, causality, parity)."""
+
     @pytest.fixture(scope="class")
     def small_model(self):
         torch.manual_seed(0)
@@ -109,8 +115,10 @@ class TestMAGVIT2Encoder:
         assert n_zero == 0
 
     def test_no_future_leakage(self, small_model):
-        """End-to-end causality test: perturbing the suffix of input frames
-        leaves the prefix of the output feature map unchanged.
+        """End-to-end causality test.
+
+        Perturbing the suffix of input frames leaves the prefix of the
+        output feature map unchanged.
 
         With temporal downsampling at stages 1 and 2 the time stride is 4×,
         so input frame index ``ti`` maps to output frame ``ti // 4``. If we
@@ -141,8 +149,10 @@ class TestMAGVIT2Encoder:
         assert torch.allclose(a, b)
 
     def test_checkpoint_parity(self):
-        """Activation checkpointing must not change the forward output (only
-        the memory profile).
+        """Checkpointed forward must match the non-checkpointed one.
+
+        Activation checkpointing only changes the memory profile, not the
+        numerical output.
         """
         torch.manual_seed(0)
         m_ref = MAGVIT2Encoder(base_channels=16, n_res_blocks=1, latent_dim=8, groups=8)
@@ -167,6 +177,8 @@ class TestMAGVIT2Encoder:
 
 @pytest.mark.unit
 class TestFactories:
+    """Smoke tests for the named MAGVIT-v2 factory presets."""
+
     @pytest.mark.parametrize(
         "factory,min_params,max_params",
         [

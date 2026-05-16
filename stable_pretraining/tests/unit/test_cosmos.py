@@ -22,14 +22,18 @@ from stable_pretraining.backbone.video import (
 
 @pytest.mark.unit
 class TestCosmosSpatialAttention:
+    """Tests for the per-frame spatial self-attention block."""
+
     def test_shape_preserved(self):
         attn = CosmosSpatialAttention(channels=16, num_heads=4)
         x = torch.randn(2, 16, 4, 8, 8)
         assert attn(x).shape == x.shape
 
     def test_per_frame_isolation(self):
-        """Spatial attention is per-frame — perturbing frame t should not
-        change the output at any other frame t' != t.
+        """Spatial attention is strictly per-frame.
+
+        Perturbing frame ``t`` should not change the output at any other
+        frame ``t' != t``.
         """
         torch.manual_seed(0)
         attn = CosmosSpatialAttention(channels=16, num_heads=4).eval()
@@ -52,14 +56,18 @@ class TestCosmosSpatialAttention:
 
 @pytest.mark.unit
 class TestCosmosCausalTemporalAttention:
+    """Tests for the causal temporal self-attention block."""
+
     def test_shape_preserved(self):
         attn = CosmosCausalTemporalAttention(channels=16, num_heads=4)
         x = torch.randn(2, 16, 4, 8, 8)
         assert attn(x).shape == x.shape
 
     def test_no_future_leakage(self):
-        """The defining property: perturbing frame ``t > k`` cannot change
-        the output at frame ``<= k``.
+        """Defining property of causal temporal attention.
+
+        Perturbing frame ``t > k`` cannot change the output at frame
+        ``<= k``.
         """
         torch.manual_seed(0)
         attn = CosmosCausalTemporalAttention(channels=16, num_heads=4).eval()
@@ -79,6 +87,8 @@ class TestCosmosCausalTemporalAttention:
 
 @pytest.mark.unit
 class TestCosmosEncoder:
+    """Tests for the full :class:`CosmosEncoder` (shape, causality, parity)."""
+
     @pytest.fixture(scope="class")
     def small_model(self):
         torch.manual_seed(0)
@@ -200,6 +210,8 @@ class TestCosmosEncoder:
 
 @pytest.mark.unit
 class TestFactories:
+    """Smoke tests for the named Cosmos factory presets."""
+
     @pytest.mark.parametrize(
         "factory,min_params,max_params",
         [

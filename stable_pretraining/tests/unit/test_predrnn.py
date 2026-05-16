@@ -22,6 +22,8 @@ from stable_pretraining.backbone.video import (
 
 @pytest.mark.unit
 class TestSTLSTMCell:
+    """Tests for the :class:`STLSTMCell` (PredRNN family cell)."""
+
     def test_output_shapes(self):
         cell = STLSTMCell(in_channels=8, hidden_channels=16, kernel_size=3)
         x = torch.randn(2, 8, 10, 10)

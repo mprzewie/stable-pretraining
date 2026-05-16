@@ -79,9 +79,10 @@ class CosmosOutput(ModelOutput):
 
 
 class _ResBlock3D(nn.Module):
-    """Causal pre-norm 3D residual block. Same recipe as MAGVIT-v2's
-    res block, kept local to avoid cross-module coupling between the two
-    families.
+    """Causal pre-norm 3D residual block.
+
+    Same recipe as MAGVIT-v2's res block, kept local to avoid cross-module
+    coupling between the two families.
     """
 
     def __init__(

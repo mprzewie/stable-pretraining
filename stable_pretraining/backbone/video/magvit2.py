@@ -105,8 +105,10 @@ class _ResBlock3D(nn.Module):
 
 
 class _Downsample(nn.Module):
-    """Strided causal 3D conv. Stride is ``(st, 2, 2)`` so spatial halves; ``st``
-    is 1 (no temporal downsample) or 2 (also halve time).
+    """Strided causal 3D conv with stride ``(st, 2, 2)``.
+
+    Spatial dims always halve; ``st`` is 1 (no temporal downsample) or 2
+    (also halve time).
     """
 
     def __init__(self, channels: int, temporal: bool):
@@ -119,8 +121,9 @@ class _Downsample(nn.Module):
 
 
 class _Stage(nn.Module):
-    """A MAGVIT-v2 encoder stage: ``n_res_blocks`` residual blocks then an
-    optional downsample.
+    """A MAGVIT-v2 encoder stage.
+
+    ``n_res_blocks`` residual blocks followed by an optional downsample.
     """
 
     def __init__(

@@ -159,7 +159,7 @@ class MambaSSMBlock(nn.Module):
         :param x: ``(B, L, d_model)``.
         :return: Same shape.
         """
-        b, l, _ = x.shape
+        b, seq_len, _ = x.shape
 
         xz = self.in_proj(x)  # (B, L, 2 * d_inner)
         u, z = xz.chunk(2, dim=-1)  # each (B, L, d_inner)
@@ -187,7 +187,7 @@ class MambaSSMBlock(nn.Module):
         # ``mamba_ssm.ops.selective_scan_fn`` — parameter layout matches.
         state = u.new_zeros(b, self.d_inner, self.d_state)
         ys = []
-        for i in range(l):
+        for i in range(seq_len):
             state = deltaA[:, i] * state + deltaB_u[:, i]
             # y_i = state @ C_p[:, i]
             ys.append(torch.einsum("bdn,bn->bd", state, C_p[:, i]))
