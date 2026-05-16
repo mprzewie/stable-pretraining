@@ -143,7 +143,7 @@ class SIGTERMException(Exception):
 
 
 def _install_sigterm_preempt_handler() -> None:
-    """Install a pre-fit SIGTERM handler that triggers submitit's requeue.
+    """Install a SIGTERM handler that triggers submitit's requeue.
 
     Why: PyTorch Lightning's ``_SignalConnector`` treats SIGTERM as a
     graceful stop — ``fit()`` returns normally, submitit sees a successful
@@ -152,7 +152,10 @@ def _install_sigterm_preempt_handler() -> None:
     sends SIGTERM directly (e.g., short grace period, ``scancel`` during
     preempt) the requeue mechanism never fires.
 
-    Fix: install our SIGTERM handler before ``Trainer.fit()`` so Lightning's
+    Fix: install our SIGTERM handler at the top of ``Manager.__init__`` so
+    it's already in place during the long data/DDP/hydra setup window
+    (where SLURM frequently delivers SIGTERM under cluster contention).
+    Later, when ``Trainer.fit()`` runs, Lightning's
     ``_SignalConnector.register_signal_handlers`` appends it to the
     composed chain (see ``signal_connector.py``: it preserves an existing
     SIGTERM handler) — and Lightning leaves submitit's USR_SIG handler in
@@ -496,6 +499,13 @@ class Manager(submitit.helpers.Checkpointable):
         weights_only: bool = True,
         compile: bool = False,
     ):
+        # Install the SIGTERM→USR_SIG forwarder FIRST — before any other init
+        # work — so the long DDP / data / hydra setup window (which can take
+        # minutes on a busy cluster) is also covered. SLURM frequently
+        # delivers SIGTERM during this window; without an installed handler
+        # the default action terminates the process and submitit sees a
+        # clean exit instead of triggering requeue.
+        _install_sigterm_preempt_handler()
         if seed is None:
             logging.warning(
                 "User didn't specify seed, runs won't be exactly reproducible!"
@@ -1629,7 +1639,7 @@ class Manager(submitit.helpers.Checkpointable):
         self._maybe_restore_swanlab_run()
         self.init_and_sync_wandb()
         print_logger_info(self._trainer.logger)
-        print_signal_info("after submitit setup, before spt SIGTERM install")
+        print_signal_info("after submitit setup (spt SIGTERM installed in __init__)")
 
         log_header("Callbacks")
         logging.info(f"  count: {len(self._trainer.callbacks)}")
@@ -1682,12 +1692,10 @@ class Manager(submitit.helpers.Checkpointable):
         log_header("TrainerFit")
         logging.info(f"  ckpt_path:     {ckpt_path}")
         logging.info(f"  weights_only:  {weights_only_for_load}")
-        # Install pre-fit SIGTERM forwarder BEFORE Lightning's SignalConnector
-        # runs (it composes our handler in rather than overwriting). Without
-        # this, SLURM-delivered SIGTERM looks like a clean exit to submitit
-        # and the job is not requeued. See _install_sigterm_preempt_handler.
-        _install_sigterm_preempt_handler()
-        print_signal_info("after spt SIGTERM install, before Trainer.fit()")
+        # Handler was installed at the top of Manager.__init__ so it covers
+        # the data/DDP setup window. Just confirm the binding is still ours
+        # before Lightning's _SignalConnector composes itself in.
+        print_signal_info("before Trainer.fit() (handler installed in __init__)")
         logging.info(
             "  → entering Trainer.fit(); lightning's _SignalConnector will now "
             "register its own handlers. SIGTERM will become "

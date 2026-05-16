@@ -1,5 +1,12 @@
 from .convmixer import ConvMixer
 from .mlp import MLP
+from .nn_modules import (
+    BatchNorm1dNoBias,
+    EMA,
+    ImageToVideoEncoder,
+    L2Norm,
+    Normalize,
+)
 from .resnet9 import Resnet9
 from .probe import (
     MultiHeadAttentiveProbe,
@@ -12,6 +19,8 @@ from .patch_masking import (
     IJEPAMasking,
     IJEPAMaskOutput,
     MultiBlockMasking,
+    patchify,
+    unpatchify,
 )
 from .utils import (
     EvalOnly,
@@ -68,6 +77,11 @@ __all__ = [
     TensorAggregator,
     TeacherStudentWrapper,
     Resnet9,
+    BatchNorm1dNoBias,
+    EMA,
+    ImageToVideoEncoder,
+    L2Norm,
+    Normalize,
     from_timm,
     from_torchvision,
     EvalOnly,
@@ -94,6 +108,8 @@ __all__ = [
     IJEPAMasking,
     IJEPAMaskOutput,
     MultiBlockMasking,
+    patchify,
+    unpatchify,
     modulate,
     vit_tiny_patch16_224,
     vit_tiny_patch16_384,
