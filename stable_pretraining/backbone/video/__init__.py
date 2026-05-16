@@ -22,6 +22,17 @@ from .magvit2 import (
     magvit2_giant,
     magvit2_gigantic,
 )
+from .predrnn import (
+    GHU,
+    PredRNNv2,
+    PredRNNv2Output,
+    STLSTMCell,
+    predrnn_v2_tiny,
+    predrnn_v2_small,
+    predrnn_v2_base,
+    predrnn_v2_large,
+    predrnn_v2_huge,
+)
 
 __all__ = [
     "CausalConv3d",
@@ -34,4 +45,13 @@ __all__ = [
     "magvit2_huge",
     "magvit2_giant",
     "magvit2_gigantic",
+    "GHU",
+    "PredRNNv2",
+    "PredRNNv2Output",
+    "STLSTMCell",
+    "predrnn_v2_tiny",
+    "predrnn_v2_small",
+    "predrnn_v2_base",
+    "predrnn_v2_large",
+    "predrnn_v2_huge",
 ]
