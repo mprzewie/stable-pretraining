@@ -66,13 +66,22 @@ from ..pos_embed import get_3d_sincos_pos_embed
 class VideoMambaOutput(ModelOutput):
     """Structured output of :class:`VideoMamba`.
 
-    :param feature_map: ``(B, N, embed_dim)`` token sequence after the
-        final norm. ``N = (1 if class_token else 0) + T' * H' * W'``.
-    :param pooled: ``(B, embed_dim)`` — CLS token if present, else mean
-        of patch tokens. ``None`` when ``global_pool=''``.
+    :param feature_map: ``(B, embed_dim, T', H', W')`` — patch tokens
+        reshaped to a 5D feature map. This matches the output convention
+        of every other video encoder in this subpackage (MAGVIT-v2,
+        Cosmos, PredRNN-v2) so the four families are interchangeable
+        downstream. CLS / prefix tokens are dropped from this view —
+        access them via ``tokens``.
+    :param tokens: ``(B, num_prefix + T'*H'*W', embed_dim)`` — the raw
+        post-norm token sequence including any CLS / register tokens.
+        Use this when you need the CLS feature explicitly or want to
+        feed an attention-style decoder.
+    :param pooled: ``(B, embed_dim)`` (or ``(B, num_classes)`` when a
+        head is configured) when ``global_pool != ''``, else ``None``.
     """
 
     feature_map: torch.Tensor = None
+    tokens: Optional[torch.Tensor] = None
     pooled: Optional[torch.Tensor] = None
 
 
@@ -391,18 +400,27 @@ class VideoMamba(nn.Module):
         return self.norm(x)
 
     def forward(self, x: torch.Tensor) -> VideoMambaOutput:
-        feat = self.forward_features(x)
+        tokens = self.forward_features(x)
         if self.global_pool == "token":
-            pooled = feat[:, 0]
+            pooled = tokens[:, 0]
         elif self.global_pool == "avg":
-            pooled = feat[:, self.num_prefix :].mean(dim=1)
+            pooled = tokens[:, self.num_prefix :].mean(dim=1)
         else:
             pooled = None
 
         if pooled is not None and self.num_classes > 0:
             pooled = self.head(pooled)
 
-        return VideoMambaOutput(feature_map=feat, pooled=pooled)
+        # Reshape patch tokens to a 5D (B, C, T', H', W') feature map so
+        # the output format matches the other video encoders.
+        b = tokens.size(0)
+        patch_tokens = tokens[:, self.num_prefix :]
+        t, h, w = self.grid_size
+        feature_map = (
+            patch_tokens.transpose(1, 2).reshape(b, self.embed_dim, t, h, w).contiguous()
+        )
+
+        return VideoMambaOutput(feature_map=feature_map, tokens=tokens, pooled=pooled)
 
 
 # -----------------------------------------------------------------------------

@@ -11,6 +11,7 @@ The naming convention for factory functions mirrors the ViT family
 """
 
 from .causal_conv3d import CausalConv3d
+from .info import count_parameters, print_video_zoo, summarize
 from .cosmos import (
     CosmosCausalTemporalAttention,
     CosmosEncoder,
@@ -64,6 +65,9 @@ from .videomamba import (
 
 __all__ = [
     "CausalConv3d",
+    "count_parameters",
+    "print_video_zoo",
+    "summarize",
     "CosmosCausalTemporalAttention",
     "CosmosEncoder",
     "CosmosOutput",
