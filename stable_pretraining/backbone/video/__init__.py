@@ -47,6 +47,20 @@ from .predrnn import (
     predrnn_v2_large,
     predrnn_v2_huge,
 )
+from .videomamba import (
+    BiMambaBlock,
+    CausalMambaBlock,
+    MambaSSMBlock,
+    VideoMamba,
+    VideoMambaOutput,
+    videomamba_tiny,
+    videomamba_small,
+    videomamba_base,
+    videomamba_large,
+    videomamba_huge,
+    videomamba_giant,
+    videomamba_gigantic,
+)
 
 __all__ = [
     "CausalConv3d",
@@ -80,4 +94,16 @@ __all__ = [
     "predrnn_v2_base",
     "predrnn_v2_large",
     "predrnn_v2_huge",
+    "BiMambaBlock",
+    "CausalMambaBlock",
+    "MambaSSMBlock",
+    "VideoMamba",
+    "VideoMambaOutput",
+    "videomamba_tiny",
+    "videomamba_small",
+    "videomamba_base",
+    "videomamba_large",
+    "videomamba_huge",
+    "videomamba_giant",
+    "videomamba_gigantic",
 ]
