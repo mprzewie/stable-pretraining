@@ -16,7 +16,8 @@ Design
   spatial stack uses an additive learned pos embed.
 - Per-frame CLS token prepended; the full ``(1+P, D)`` sequence goes through
   ``spatial_depth`` :class:`~stable_pretraining.backbone.vit.TransformerBlock`
-  layers (``self_attn=True, use_rope=None, use_qk_norm=True, mlp_type='gelu'``).
+  layers (``self_attn=True, use_rope=None, mlp_type='gelu'``). QK-norm is
+  off by default and only enabled on the ``huge`` preset.
 - ``LayerNorm`` (``norm_s``) then split: CLS → ``(B, T, D)``, patches →
   ``(B, T, P, D)``.
 - ``nn.GRU(D, D, num_layers=gru_layers, batch_first=True)`` walks the CLS
@@ -47,8 +48,8 @@ Example::
     x = torch.randn(2, 3, 8, 64, 64)
     out = enc(x)
     out.feature_map.shape  # (2, 192, 8, 8, 8)
-    out.pooled.shape       # (2, 192)
-    out.tokens.shape       # (2, 8, 192)
+    out.pooled.shape  # (2, 192)
+    out.tokens.shape  # (2, 8, 192)
 """
 
 from __future__ import annotations
@@ -244,8 +245,10 @@ class RecurrentViT(nn.Module):
             # (B, 1, D) -> broadcast to (B*T, 1, D) so each frame of clip i
             # carries clip i's cam embedding.
             ce = self.cam_embed[cam_id]
-            ce = ce.unsqueeze(1).expand(B, T, 1, self.embed_dim).reshape(
-                B * T, 1, self.embed_dim
+            ce = (
+                ce.unsqueeze(1)
+                .expand(B, T, 1, self.embed_dim)
+                .reshape(B * T, 1, self.embed_dim)
             )
             x = x + ce
 
@@ -270,13 +273,9 @@ class RecurrentViT(nn.Module):
             .permute(0, 4, 1, 2, 3)
             .contiguous()
         )
-        pooled = (
-            feature_map.mean(dim=(2, 3, 4)) if self.global_pool == "avg" else None
-        )
+        pooled = feature_map.mean(dim=(2, 3, 4)) if self.global_pool == "avg" else None
 
-        return RecurrentViTOutput(
-            feature_map=feature_map, pooled=pooled, tokens=tokens
-        )
+        return RecurrentViTOutput(feature_map=feature_map, pooled=pooled, tokens=tokens)
 
 
 # -----------------------------------------------------------------------------

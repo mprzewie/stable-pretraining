@@ -22,8 +22,11 @@ class TestRecurrentViTShapes:
     """Output shape and dataclass contract."""
 
     def test_recurrent_vit_shapes(self):
-        """Default tiny on a (2, 3, 8, 64, 64) clip produces the documented
-        ``feature_map`` / ``pooled`` / ``tokens`` shapes."""
+        """Default tiny produces the documented output shapes.
+
+        Input ``(2, 3, 8, 64, 64)`` → ``feature_map=(2, 192, 8, 8, 8)``,
+        ``pooled=(2, 192)``, ``tokens=(2, 8, 192)``.
+        """
         torch.manual_seed(0)
         enc = recurrent_vit_tiny()
         enc.eval()
@@ -37,8 +40,7 @@ class TestRecurrentViTShapes:
         assert out.tokens.shape == (2, 8, 192)
 
     def test_no_pool(self):
-        """``global_pool=''`` zeroes the pooled slot but keeps feature_map and
-        tokens populated."""
+        """``global_pool=''`` drops the pooled slot but keeps feature_map and tokens."""
         m = RecurrentViT(
             img_size=32,
             patch_size=8,
@@ -70,9 +72,12 @@ class TestRecurrentViTShapes:
 
 @pytest.mark.unit
 class TestNoFutureLeakage:
-    """The GRU on the pooled CLS sequence makes the model causal in time;
-    the per-frame ViT can't leak future info either because frames are
-    encoded independently."""
+    """Causality of feature_map and tokens.
+
+    The GRU on the pooled CLS sequence makes ``tokens`` causal in time;
+    the per-frame ViT can't leak future info into ``feature_map`` either,
+    because frames are encoded independently.
+    """
 
     def test_no_future_leakage(self):
         torch.manual_seed(0)
@@ -92,21 +97,19 @@ class TestNoFutureLeakage:
             out_a.feature_map[:, :, 4:], out_b.feature_map[:, :, 4:], atol=1e-5
         )
         # tokens are GRU output: causal by construction.
-        assert torch.allclose(
-            out_a.tokens[:, :4], out_b.tokens[:, :4], atol=1e-5
-        )
-        assert not torch.allclose(
-            out_a.tokens[:, 4:], out_b.tokens[:, 4:], atol=1e-5
-        )
+        assert torch.allclose(out_a.tokens[:, :4], out_b.tokens[:, :4], atol=1e-5)
+        assert not torch.allclose(out_a.tokens[:, 4:], out_b.tokens[:, 4:], atol=1e-5)
 
 
 @pytest.mark.unit
 class TestFactoryParamCounts:
-    """Each preset's total parameter count must be in the documented
-    ViT-family budget ballpark. Tolerance is ±20%: the targets are
-    standard-ViT-shaped approximations, and the GRU + patch embed + QK-norm
-    each shift the count by a few percent, so a single fixed target won't
-    sit at the center of every preset."""
+    """Each preset lands in the documented ViT-family param budget.
+
+    Tolerance is ±20%: the targets are standard-ViT-shaped approximations,
+    and the GRU + patch embed + QK-norm each shift the count by a few
+    percent, so a single fixed target won't sit at the center of every
+    preset.
+    """
 
     @pytest.mark.parametrize(
         "factory,target",
@@ -133,8 +136,11 @@ class TestFactoryParamCounts:
 
 @pytest.mark.unit
 class TestSmallerPresetsForward:
-    """Smoke-forward the smaller presets so we cover the GRU path on a real
-    tensor without paying the large preset's memory cost."""
+    """Real-tensor smoke forward for the smaller presets.
+
+    Exercises the GRU path on a real tensor without paying the large
+    preset's memory cost.
+    """
 
     @pytest.mark.parametrize("factory", [recurrent_vit_tiny, recurrent_vit_small])
     def test_forward_runs(self, factory):
