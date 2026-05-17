@@ -25,6 +25,13 @@ class OnlineQueue(Callback):
     queue sharing: when multiple callbacks request the same data with different sizes,
     it uses a single queue with the maximum size and serves appropriate subsets.
 
+    Note:
+        ``OnlineKNN``, ``RankMe``, and similar consumers auto-create their
+        own ``OnlineQueue`` via ``find_or_create_queue_callback``, so users
+        rarely need to register one explicitly. Add one manually only when
+        you need a non-default queue length, a shared queue across multiple
+        consumers, or specific ``gather_distributed`` semantics.
+
     Key features:
     - Maintains insertion order using OrderedQueue
     - Unified storage: one queue per key, shared across different size requests

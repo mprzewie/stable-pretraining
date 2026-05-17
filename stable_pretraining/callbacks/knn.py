@@ -27,6 +27,13 @@ class OnlineKNN(Callback):
     3. Using weighted voting to produce class predictions
     4. Computing specified metrics on the predictions
 
+    Note:
+        Auto-creates its own input and target ``OnlineQueue`` callbacks if
+        none with matching keys are registered, so users typically only
+        need to add ``OnlineKNN`` itself. Pass a manually-registered
+        ``OnlineQueue`` only to override the default queue length or share
+        a queue across multiple consumers.
+
     Args:
         name: Unique identifier for this callback instance. Used for logging and
             storing metrics.
