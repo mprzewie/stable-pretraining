@@ -80,8 +80,11 @@ class TestOrderedQueueStateDictRoundTrip:
         torch.testing.assert_close(dst.queue.get(), src.queue.get())
 
     def test_roundtrip_preserves_pointer_and_filled(self):
-        """Non-buffer scalar tensors (pointer / filled / global_counter) must
-        also be restored exactly.
+        """Scalar bookkeeping tensors round-trip exactly.
+
+        ``pointer``, ``filled``, and ``global_counter`` are all 0-dim
+        buffers that must be restored verbatim — otherwise resumed runs
+        would lose track of insertion order or wraparound state.
         """
 
         class Parent(nn.Module):
@@ -106,8 +109,11 @@ class TestOrderedQueueStateDictRoundTrip:
         torch.testing.assert_close(dst.queue.get(), src.queue.get())
 
     def test_loading_into_partially_filled_queue_resizes_correctly(self):
-        """If the destination was previously initialized to a different shape
-        than the source, the load must still succeed (the override resizes).
+        """Loading resizes ``out`` when destination shape differs from source.
+
+        Exercises the override's resize-then-copy logic when a destination
+        queue was already initialized to a different shape than the saved
+        source — must still succeed without a shape-mismatch error.
         """
 
         class Parent(nn.Module):

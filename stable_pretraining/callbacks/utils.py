@@ -419,9 +419,15 @@ class TrainableCallback(Callback):
                 exclude_bias_n_norm=True,
                 weight_decay=0,
             )
-        # Use explicitly provided optimizer config
+        # Use explicitly provided optimizer config. Passing ``named_params``
+        # lets ``exclude_bias_norm`` (#368) work whether set per-config or via
+        # the global default.
         logging.info("  using explicitly provided optimizer")
-        return create_optimizer(self.module.parameters(), self._optimizer_config)
+        return create_optimizer(
+            self.module.parameters(),
+            self._optimizer_config,
+            named_params=self.module.named_parameters(),
+        )
 
     def setup_scheduler(self, optimizer, pl_module: LightningModule) -> None:
         """Initialize scheduler with default ConstantLR if not specified."""
