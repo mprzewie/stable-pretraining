@@ -24,6 +24,29 @@ import torchmetrics
 from stable_pretraining.callbacks.image_retrieval import ImageRetrieval
 
 
+@pytest.fixture(autouse=True)
+def _isolate_spt_logging(monkeypatch):
+    """Neutralize ``_spt_log_dict`` for the duration of every test in this file.
+
+    The SPT logging registry is a process-wide singleton (see
+    ``callbacks/registry.py``). When the full test suite runs, prior tests
+    register real ``pl.LightningModule`` instances; when our tests later
+    trigger ``_spt_log_dict`` via ``ImageRetrieval.on_validation_epoch_end``,
+    that helper attempts ``module.log_dict(...)`` on the stale module, which
+    Lightning rejects with ``MisconfigurationException`` because there is no
+    active loop. Tests that run in isolation pass (registry empty → just a
+    UserWarning) but the suite fails on CI.
+
+    Stubbing the symbol at the *import site* (``image_retrieval._spt_log_dict``)
+    keeps the production code path intact while making the test independent of
+    whatever the global registry happens to contain.
+    """
+    monkeypatch.setattr(
+        "stable_pretraining.callbacks.image_retrieval._spt_log_dict",
+        lambda *args, **kwargs: None,
+    )
+
+
 class FakeHFDataset:
     """Minimal HF-dataset-like for testing.
 
