@@ -188,8 +188,10 @@ class TestIsBiasOrNormParamHeuristic:
         assert is_bias_or_norm_param("LayerNorm.weight", p) is True
 
     def test_1d_param_caught_even_without_norm_in_name(self):
-        """Regression: BN weight inside ``Sequential`` (named ``1.weight``,
-        no 'norm' substring) must still be flagged because it's 1-D.
+        """1-D BN weight inside ``Sequential`` must still be flagged.
+
+        Named ``1.weight`` (no 'norm' substring), so only the 1-D rule
+        catches it — this is the regression the heuristic fix targets.
         """
         m = nn.Sequential(nn.Linear(8, 4), nn.BatchNorm1d(4))
         for name, p in m.named_parameters():
@@ -237,8 +239,7 @@ class TestIsBiasOrNormParamHeuristic:
 
 @pytest.mark.unit
 class TestTrainingStepImpact:
-    """Behavioural tests: actually step an optimizer and verify which params
-    move under weight decay and which don't.
+    """Behavioural tests: actually step an optimizer and check parameter moves.
 
     Strategy: zero all gradients, then call ``optimizer.step()``. With zero
     gradients, the SGD update reduces to a pure weight-decay shrink:
@@ -342,8 +343,10 @@ class TestTrainingStepImpact:
             torch.testing.assert_close(p_a, p_b, rtol=1e-6, atol=1e-7)
 
     def test_global_flag_changes_actual_training_outcome(self):
-        """Global on vs off must produce different trained weights — confirms
-        the flag has a real effect, not just a no-op.
+        """Global on vs off produces different trained weights.
+
+        Confirms the flag has a real effect on optimisation, not just a
+        no-op that happens to leave some param shapes unchanged.
         """
         torch.manual_seed(0)
         model_on = _toy_model()
