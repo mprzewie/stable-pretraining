@@ -38,9 +38,9 @@ class TestLogCallbacksOrder:
     def test_empty_list_handled(self, captured_loguru_lines):
         log_callbacks_order([])
         # Doesn't crash; emits a "none registered" hint.
-        assert any(
-            "none registered" in line for line in captured_loguru_lines
-        ), captured_loguru_lines
+        assert any("none registered" in line for line in captured_loguru_lines), (
+            captured_loguru_lines
+        )
 
     def test_lists_classes_in_registration_order(self, captured_loguru_lines):
         callbacks = [_FakeRegular(), _FakeRegular(), _FakeRegular()]
@@ -50,9 +50,7 @@ class TestLogCallbacksOrder:
         idx_0 = joined.find("[0]")
         idx_1 = joined.find("[1]")
         idx_2 = joined.find("[2]")
-        assert 0 <= idx_0 < idx_1 < idx_2, (
-            f"Indices not in order in output:\n{joined}"
-        )
+        assert 0 <= idx_0 < idx_1 < idx_2, f"Indices not in order in output:\n{joined}"
 
     def test_order_sensitive_marked_with_glyph(
         self, captured_loguru_lines, monkeypatch
@@ -96,16 +94,12 @@ class TestLogCallbacksOrder:
             "CleanUpCallback",
         }
         actual = set(ORDER_SENSITIVE_CALLBACKS.keys())
-        assert expected.issubset(actual), (
-            f"Missing from registry: {expected - actual}"
-        )
+        assert expected.issubset(actual), f"Missing from registry: {expected - actual}"
 
     def test_legend_line_present_when_any_sensitive(
         self, captured_loguru_lines, monkeypatch
     ):
-        monkeypatch.setitem(
-            ORDER_SENSITIVE_CALLBACKS, "_FakeOrderSensitive", "rule"
-        )
+        monkeypatch.setitem(ORDER_SENSITIVE_CALLBACKS, "_FakeOrderSensitive", "rule")
         log_callbacks_order([_FakeOrderSensitive()])
         joined = "\n".join(captured_loguru_lines)
         assert "AGENTS.md → Callback ordering" in joined

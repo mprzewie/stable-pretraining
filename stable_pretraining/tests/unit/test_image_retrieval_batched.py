@@ -82,11 +82,11 @@ def _make_pl_module(val_dataset, name, retrieval_metrics, device=None):
 
 
 def _make_callback(name, retrieval_col, features_dim=None, embeds=None):
-    """Construct an ImageRetrieval callback without going through __init__'s
-    pl_module-mutating side effects (which would require a full LightningModule).
+    """Build an ImageRetrieval callback bypassing __init__'s side effects.
 
-    The ``embeds`` arg seeds the callback's embedding buffer for tests that
-    exercise ``on_validation_epoch_end`` directly.
+    Avoids the pl_module-mutating side effects (which would require a full
+    LightningModule). The ``embeds`` arg seeds the callback's embedding
+    buffer for tests that exercise ``on_validation_epoch_end`` directly.
     """
     cb = ImageRetrieval.__new__(ImageRetrieval)
     cb.name = name
@@ -114,9 +114,7 @@ class TestImageRetrievalCorrectness:
             "easy": [
                 [0] if i in queries else [] for i in range(n_rows)
             ],  # gallery index 0 is the easy match for every query
-            "hard": [
-                [gallery_n - 1] if i in queries else [] for i in range(n_rows)
-            ],
+            "hard": [[gallery_n - 1] if i in queries else [] for i in range(n_rows)],
         }
 
         val_dataset = FakeHFDataset(
@@ -178,7 +176,9 @@ class TestImageRetrievalSpeed:
     """
 
     def test_no_quadratic_blowup_with_queries(self):
-        """With a sizable query count and a slow per-row delay, the fix must
+        """Many queries with a slow per-row delay still finishes quickly.
+
+        With a sizable query count and a slow per-row delay, the fix must
         complete in well under the time the old path would have needed.
         """
         n_rows = 50
@@ -200,9 +200,7 @@ class TestImageRetrievalSpeed:
         )
         metrics = {"R@1": torchmetrics.retrieval.RetrievalRecall(top_k=1)}
         pl_module = _make_pl_module(val_dataset, "img_ret", metrics)
-        cb = _make_callback(
-            "img_ret", ["easy", "hard"], features_dim=4, embeds=embeds
-        )
+        cb = _make_callback("img_ret", ["easy", "hard"], features_dim=4, embeds=embeds)
 
         t0 = time.perf_counter()
         cb.on_validation_epoch_end(trainer=None, pl_module=pl_module)
@@ -243,8 +241,10 @@ class TestImageRetrievalEdgeCases:
         assert "img_ret" in pl_module.callbacks_metrics
 
     def test_empty_relevance_per_row(self):
-        """A query with no relevant items must not crash and must produce
-        finite metric values (the metric will be 0 for that query).
+        """A query with no relevant items must not crash.
+
+        Metric will be 0 for that query but should remain finite. Guards
+        against a regression where the empty-target path could NaN out.
         """
         retrieval_data = {"easy": [[] for _ in range(6)]}  # nothing relevant
         pl_module, _, metrics, embeds = self._build(retrieval_data)
