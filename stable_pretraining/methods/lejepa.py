@@ -29,6 +29,8 @@ Example::
 from dataclasses import dataclass
 from transformers.utils import ModelOutput
 from typing import Optional
+from numbers import Real
+import math
 
 import timm
 import torch
@@ -51,7 +53,7 @@ class EppsPulley(nn.Module):
     :param n_points: Number of integration points.
     """
 
-    def __init__(self, t_max: float = 3.0, n_points: int = 17):
+    def __init__(self, t_max: float = 3.0, n_points: int = 17, gamma: float | None = 0.5):
         super().__init__()
         assert n_points % 2 == 1
 
@@ -69,7 +71,8 @@ class EppsPulley(nn.Module):
 
         weights = torch.full((n_points,), 2 * dt)
         weights[[0, -1]] = dt
-        self.register_buffer("weights", weights * phi)
+        self.register_buffer("weights", weights)
+        self.gamma = gamma
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """:param x: Samples [N, S] (N samples, S slices).
@@ -86,7 +89,18 @@ class EppsPulley(nn.Module):
             all_reduce(sin_mean, op=torch.distributed.ReduceOp.AVG)
 
         err = (cos_mean - self.phi).square() + sin_mean.square()
-        return (err @ self.weights) * N * self.world_size
+        if self.gamma is not None:
+            gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
+        else:
+            gamma = silverman_rule_of_thumb(
+                    sample_stddev=1.0,
+                    sample_count=N * self.world_size,
+                ).to(device=x.device, dtype=x.dtype)
+            
+        window = (-gamma * self.t.square()).exp()
+        weights = self.weights * window
+            
+        return (err @ weights) * N * self.world_size
 
 
 class SlicedEppsPulley(nn.Module):
@@ -101,13 +115,13 @@ class SlicedEppsPulley(nn.Module):
     :param n_points: EP quadrature nodes.
     """
 
-    def __init__(self, num_slices: int = 1024, t_max: float = 3.0, n_points: int = 17):
+    def __init__(self, num_slices: int = 1024, t_max: float = 3.0, n_points: int = 17, gamma: float | None = 0.5):
         super().__init__()
         self._is_ddp = (
             torch.distributed.is_available() and torch.distributed.is_initialized()
         )
         self.num_slices = num_slices
-        self.ep = EppsPulley(t_max=t_max, n_points=n_points)
+        self.ep = EppsPulley(t_max=t_max, n_points=n_points, gamma=gamma)
         self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -150,7 +164,7 @@ class CWReg(nn.Module):
         else:
             gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
 
-        return cw_normality(x, gamma)
+        return 2.0 * math.pi * x.shape[0] * cw_normality(x, gamma)
 
 
 @dataclass
@@ -239,7 +253,7 @@ class LeJEPA(Module):
         pretrained: bool = False,
         drop_path_rate: float = 0.1,
         sigreg: str = "ep",
-        cw_gamma: float | None = None,
+        override_sr_gamma: float | str | None = None,
     ):
         super().__init__()
 
@@ -268,12 +282,31 @@ class LeJEPA(Module):
 
         self.projector = projector
 
+        if override_sr_gamma is None:
+            # Method-specific defaults:
+            # original EP uses gamma=0.5
+            # CW uses Silverman
+            sr_gamma = 0.5 if sigreg == "ep" else None
+        
+        elif override_sr_gamma == "silverman":
+            sr_gamma = None
+        
+        elif isinstance(override_sr_gamma, Real):
+            sr_gamma = float(override_sr_gamma)
+            if sr_gamma <= 0:
+                raise ValueError("override_sr_gamma must be positive.")
+        else:
+            raise ValueError(
+                "override_sr_gamma must be None, 'silverman', "
+                f"or a positive number, got {override_sr_gamma!r}"
+            )
+    
         if sigreg == "ep":
             self.sigreg = SlicedEppsPulley(
-                num_slices=n_slices, t_max=t_max, n_points=n_points
+                num_slices=n_slices, t_max=t_max, n_points=n_points, gamma=sr_gamma
             )
         elif sigreg == "cw":
-            self.sigreg = CWReg(gamma=cw_gamma)
+            self.sigreg = CWReg(gamma=sr_gamma)
         else:
             raise ValueError(
                 f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep' or 'cw'"
