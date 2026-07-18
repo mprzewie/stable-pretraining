@@ -168,13 +168,16 @@ def instantiate_from_config(cfg: Union[dict, omegaconf.DictConfig]) -> Any:
     # Check if this is a Manager-based config (has trainer, module, data)
     if all(k in components for k in ["trainer", "module", "data"]):
         # Create Manager for training
+        weights_only = components.get(
+            "weights_only", components.get("resume_weights_only", False)
+        )
         manager = Manager(
             trainer=components["trainer"],
             module=components["module"],
             data=components["data"],
             seed=components.get("seed", None),
             ckpt_path=components.get("ckpt_path", None),
-            resume_weights_only=components.get("resume_weights_only", False),
+            weights_only=weights_only,
         )
         return manager
 

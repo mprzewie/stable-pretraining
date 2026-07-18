@@ -14,6 +14,8 @@ Available forward functions:
     - ``nnclr`` — NNCLR nearest-neighbor contrastive learning
     - ``dino`` — DINO self-distillation with multi-crop
     - ``dinov2`` — DINOv2 with iBOT masked patch prediction
+    - ``lejepa`` — LeJEPA multi-view invariance with SIGReg
+    - ``lejepa_linear_probe`` — frozen LeJEPA backbone for post-hoc probing
 
 These are the lightweight composable form of each method. For full
 ``LightningModule`` implementations of 30+ SSL methods (BYOL, DINO, MAE,
@@ -112,6 +114,99 @@ def _get_views_by_prefix(
 
     all_views = global_views + local_views
     return global_views, local_views, all_views
+
+
+def lejepa(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
+    """Forward function for LeJEPA multi-view pretraining.
+
+    Args:
+        self: Module instance with a ``model`` attribute containing
+            :class:`stable_pretraining.methods.LeJEPA`.
+        batch: Training batches must contain named ``global_*`` and ``local_*``
+            views from ``MultiViewTransform``. Validation batches contain a
+            single ``"image"`` tensor and optional ``"label"``.
+        stage: Lightning stage name. ``"fit"`` runs the SSL objective;
+            validation/test stages run single-view feature extraction.
+
+    Returns:
+        Dictionary with ``"loss"``, ``"embedding"``, and ``"label"`` when
+        labels are available.
+
+    Note:
+        The returned training embeddings are the global-view backbone features,
+        so labels are repeated once per global view for online probes.
+    """
+    out = {}
+    global_views, local_views, _ = _get_views_by_prefix(
+        batch, global_prefix="global", local_prefix="local"
+    )
+
+    if stage == "fit":
+        output = self.model(
+            global_views=[view["image"] for view in global_views],
+            local_views=[view["image"] for view in local_views],
+        )
+        if "label" in global_views[0]:
+            out["label"] = torch.cat([view["label"].long() for view in global_views])
+    else:
+        output = self.model(images=batch["image"])
+        if "label" in batch:
+            out["label"] = batch["label"].long()
+
+    out["loss"] = output.loss
+    out["embedding"] = output.embedding
+    self.log(
+        f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True
+    )
+    self.log(
+        f"{stage}/inv", output.inv_loss, on_step=True, on_epoch=True, sync_dist=True
+    )
+    self.log(
+        f"{stage}/sigreg",
+        output.sigreg_loss,
+        on_step=True,
+        on_epoch=True,
+        sync_dist=True,
+    )
+    return out
+
+
+def lejepa_linear_probe(
+    self, batch: dict[str, Any], stage: str
+) -> dict[str, torch.Tensor]:
+    """Forward function for post-training linear probing of a LeJEPA checkpoint.
+
+    Args:
+        self: Module instance with a loaded ``model`` attribute containing
+            :class:`stable_pretraining.methods.LeJEPA`.
+        batch: Single-view supervised batch with ``"image"`` and ``"label"``.
+        stage: Lightning stage name.
+
+    Returns:
+        Dictionary containing frozen ``"embedding"``, ``"label"``, and a zero
+        ``"loss"``. An ``OnlineProbe`` callback should be attached to provide
+        the trainable classifier and probe loss.
+
+    Note:
+        This function freezes ``self.model`` lazily on first use, allowing the
+        same LeJEPA checkpoint to be loaded via ``Manager(ckpt_path=...)`` while
+        training only callback-owned probe parameters.
+    """
+    if not getattr(self, "_lejepa_probe_frozen", False):
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self._lejepa_probe_frozen = True
+
+    self.model.eval()
+    with torch.no_grad():
+        output = self.model(images=batch["image"])
+
+    return {
+        "loss": output.loss,
+        "embedding": output.embedding.detach(),
+        "label": batch["label"].long(),
+    }
 
 
 def supervised(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
