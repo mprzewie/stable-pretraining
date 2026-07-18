@@ -38,6 +38,9 @@ from torch.distributed.nn import all_reduce
 from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
 
+from cw_torch.gamma import silverman_rule_of_thumb
+from cw_torch.metric import cw_normality
+
 
 class EppsPulley(nn.Module):
     """Epps-Pulley goodness-of-fit test for univariate normality.
@@ -131,6 +134,18 @@ class SlicedEppsPulley(nn.Module):
         return self.ep(proj).mean()
 
 
+class CWReg(nn.Module):
+    """Closed-form Cramer-Wold regularizer toward a standard Gaussian."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gamma = silverman_rule_of_thumb(
+            sample_stddev=1.0,
+            sample_count=x.shape[0],
+        ).to(device=x.device, dtype=x.dtype)
+
+        return cw_normality(x, gamma)
+
+
 @dataclass
 class LeJEPAOutput(ModelOutput):
     """Output from LeJEPA forward pass.
@@ -216,6 +231,7 @@ class LeJEPA(Module):
         lamb: float = 0.02,
         pretrained: bool = False,
         drop_path_rate: float = 0.1,
+        sigreg: str = "ep",
     ):
         super().__init__()
 
@@ -244,9 +260,17 @@ class LeJEPA(Module):
 
         self.projector = projector
 
-        self.sigreg = SlicedEppsPulley(
-            num_slices=n_slices, t_max=t_max, n_points=n_points
-        )
+        if sigreg == "ep":
+            self.sigreg = SlicedEppsPulley(
+                num_slices=n_slices, t_max=t_max, n_points=n_points
+            )
+        elif sigreg == "cw":
+            self.sigreg = CWReg()
+        else:
+            raise ValueError(
+                f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep' or 'cw'"
+            )
+
         self.lamb = lamb
         self.embed_dim = embed_dim
 
