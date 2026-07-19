@@ -425,15 +425,21 @@ class LanceImageDataset(Dataset):
         self,
         lance_path: Union[str, Path],
         *,
+        split: Optional[str] = None,
         image_format: str = "pil",
         columns: Optional[list[str]] = None,
         transform: Optional[Callable] = None,
+        gpu_transform: Optional[Callable] = None,
+        **kwargs,
     ):
-        super().__init__(transform=transform)
+        super().__init__(transform=transform, gpu_transform=gpu_transform)
         if image_format not in ("pil", "tensor"):
             raise ValueError(
                 f"image_format must be 'pil' or 'tensor', got {image_format!r}"
             )
+        lance_path = Path(lance_path)
+        if split is not None and not str(lance_path).endswith(".lance"):
+            lance_path = lance_path / f"{split}.lance"
         self.lance_path = str(lance_path)
         self.image_format = image_format
 
@@ -447,6 +453,7 @@ class LanceImageDataset(Dataset):
         self._num_rows = int(meta["num_rows"])
         self._image_columns = list(meta["image_columns"])
         all_columns = list(meta["columns"])
+        self._columns = all_columns
 
         if columns is None:
             self._load_columns = all_columns
@@ -463,6 +470,11 @@ class LanceImageDataset(Dataset):
     def image_columns(self) -> list[str]:
         """Names of the columns that are decoded as images."""
         return list(self._image_columns)
+
+    @property
+    def column_names(self) -> list[str]:
+        """Names of the original source columns."""
+        return list(self._columns)
 
     def _decode(self, blob: bytes):
         bgr = cv2.imdecode(np.frombuffer(blob, dtype=np.uint8), cv2.IMREAD_COLOR)

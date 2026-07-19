@@ -72,7 +72,7 @@ data:
     drop_last: false
     shuffle: true
     dataset:
-      _target_: stable_pretraining.data.HFDataset
+      _target_: ${eval:'"stable_pretraining.data.images.LanceImageDataset" if "${oc.env:DATASET_BACKEND,hf}" == "lance" else "stable_pretraining.data.HFDataset"'}
       _args_:
         - ${oc.env:DATASET_PATH,frgfm/imagenette}
       split: ${oc.env:TRAIN_SPLIT,train}
@@ -84,7 +84,7 @@ data:
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
     prefetch_factor: ${eval:${oc.env:PREFETCH_FACTOR,4}}
     dataset:
-      _target_: stable_pretraining.data.HFDataset
+      _target_: ${eval:'"stable_pretraining.data.images.LanceImageDataset" if "${oc.env:DATASET_BACKEND,hf}" == "lance" else "stable_pretraining.data.HFDataset"'}
       _args_:
         - ${oc.env:DATASET_PATH,frgfm/imagenette}
       split: ${oc.env:VAL_SPLIT,validation}
