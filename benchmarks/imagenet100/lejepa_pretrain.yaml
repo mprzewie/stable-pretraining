@@ -21,6 +21,7 @@ trainer:
     - _target_: lightning.pytorch.callbacks.LearningRateMonitor
       logging_interval: step
     - _target_: stable_pretraining.callbacks.OnlineProbe
+      _partial_: true
       name: linear_probe
       input: embedding
       target: label

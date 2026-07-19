@@ -14,6 +14,7 @@ trainer:
   default_root_dir: ${oc.env:PROBE_OUTPUT_DIR,${oc.env:OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa-probe}}
   callbacks:
     - _target_: stable_pretraining.callbacks.OnlineProbe
+      _partial_: true
       name: linear_probe
       input: embedding
       target: label
