@@ -1,5 +1,6 @@
 import copy
 import math
+from pathlib import Path
 from typing import Union, Iterable, List, Optional, Any, Dict
 
 import torch
@@ -694,6 +695,40 @@ def from_timm(model_name, low_resolution=False, **kwargs):
             model.maxpool = nn.Identity()
         else:
             logging.warning(f"Cannot adapt resolution for model: {model_name}.")
+    return model
+
+
+def from_timm_checkpoint(
+    model_name: str,
+    checkpoint_path: str,
+    low_resolution: bool = False,
+    **kwargs,
+) -> nn.Module:
+    """Create a timm backbone and load a standalone backbone state dict.
+
+    Args:
+        model_name: Name passed to ``timm.create_model``.
+        checkpoint_path: Absolute path to a state dict for this backbone.
+        low_resolution: If True, apply the same low-resolution adaptation as
+            :func:`from_timm`.
+        **kwargs: Additional keyword arguments passed to ``timm.create_model``.
+
+    Returns:
+        Backbone with the exported state dict loaded.
+    """
+    path = Path(checkpoint_path).expanduser()
+    if not path.is_absolute():
+        raise ValueError(
+            f"checkpoint_path must be an absolute path; got {checkpoint_path!r}"
+        )
+    if not path.is_file():
+        raise FileNotFoundError(f"checkpoint_path does not exist: {path}")
+
+    model = from_timm(model_name, low_resolution=low_resolution, **kwargs)
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(state, dict):
+        raise ValueError(f"checkpoint_path must contain a state dict: {path}")
+    model.load_state_dict(state)
     return model
 
 

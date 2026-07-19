@@ -1,6 +1,4 @@
 seed: ${eval:${oc.env:SEED,42}}
-ckpt_path: ${oc.env:CKPT_PATH}
-weights_only: true
 
 trainer:
   _target_: lightning.Trainer
@@ -36,6 +34,17 @@ trainer:
         type: AdamW
         lr: ${eval:${oc.env:PROBE_LR,0.03}}
         weight_decay: ${eval:${oc.env:PROBE_WEIGHT_DECAY,1e-6}}
+    - _target_: stable_pretraining.callbacks.OnlineKNN
+      name: knn_probe
+      input: embedding
+      target: label
+      queue_length: ${eval:${oc.env:KNN_QUEUE_LENGTH,10000}}
+      metrics:
+        top1:
+          _target_: torchmetrics.classification.MulticlassAccuracy
+          num_classes: ${eval:${oc.env:NUM_CLASSES,10}}
+      input_dim: ${eval:${oc.env:EMBED_DIM,384}}
+      k: ${eval:${oc.env:KNN_K,20}}
   logger:
     _target_: lightning.pytorch.loggers.CSVLogger
     save_dir: ${oc.env:PROBE_OUTPUT_DIR,${oc.env:OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa-probe}}/logs
@@ -43,18 +52,15 @@ trainer:
 
 module:
   _target_: stable_pretraining.Module
-  forward: stable_pretraining.forward.lejepa_linear_probe
-  model:
-    _target_: stable_pretraining.methods.LeJEPA
-    encoder_name: ${oc.env:ENCODER_NAME,vit_small_patch16_224}
+  forward: stable_pretraining.forward.frozen_backbone_probe
+  backbone:
+    _target_: stable_pretraining.backbone.from_timm_checkpoint
+    model_name: ${oc.env:ENCODER_NAME,vit_small_patch16_224}
+    checkpoint_path: ${oc.env:BACKBONE_CKPT}
     pretrained: false
+    num_classes: 0
+    dynamic_img_size: true
     drop_path_rate: 0.0
-    sigreg: ${oc.env:SIGREG,ep}
-    override_sr_gamma: ${oc.decode:${oc.env:OVERRIDE_SR_GAMMA,null}}
-    lamb: ${eval:${oc.env:LAMB,0.02}}
-    n_slices: ${eval:${oc.env:N_SLICES,1024}}
-    n_points: ${eval:${oc.env:N_POINTS,17}}
-    t_max: ${eval:${oc.env:T_MAX,3.0}}
   optim: null
 
 data:
@@ -62,6 +68,7 @@ data:
   train:
     batch_size: ${eval:${oc.env:PROBE_BATCH_SIZE,128}}
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
+    prefetch_factor: ${eval:${oc.env:PREFETCH_FACTOR,4}}
     drop_last: false
     shuffle: true
     dataset:
@@ -75,6 +82,7 @@ data:
   val:
     batch_size: ${eval:${oc.env:VAL_BATCH_SIZE,128}}
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
+    prefetch_factor: ${eval:${oc.env:PREFETCH_FACTOR,4}}
     dataset:
       _target_: stable_pretraining.data.HFDataset
       _args_:

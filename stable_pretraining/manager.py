@@ -1502,11 +1502,16 @@ class Manager(submitit.helpers.Checkpointable):
     def _flatten_hydra_config(self) -> dict:
         """Build a flat dot-separated dict from the raw Hydra configs.
 
-        Collects ``trainer``, ``module``, and ``data`` DictConfigs, flattens
-        them with ``pd.json_normalize``, and recursively expands lists.
-        Returns an empty dict when everything is already instantiated.
+        Collects top-level Manager run parameters plus ``trainer``, ``module``,
+        and ``data`` DictConfigs, flattens them with ``pd.json_normalize``, and
+        recursively expands lists.
         """
-        config = {}
+        config = {
+            "seed": self.seed,
+            "weights_only": self.weights_only,
+        }
+        if self.ckpt_path is not None:
+            config["ckpt_path"] = str(self.ckpt_path)
         if isinstance(self.trainer, (dict, DictConfig)):
             config["trainer"] = OmegaConf.to_container(self.trainer, resolve=True)
         if isinstance(self.module, (dict, DictConfig)):
@@ -1662,19 +1667,25 @@ class Manager(submitit.helpers.Checkpointable):
             # at most last_config has an extra `ckpt_path`
             exp.config.update(last_config)
             logging.info("  reloaded!")
-        elif WANDB_AVAILABLE and wandb.run and len(wandb.config.keys()):
-            logging.info("  a Wandb config is provided, not uploading Hydra's:")
         else:
-            logging.info("  Wandb's config is empty, trying to use Hydra's")
+            logging.info("  Trying to merge Hydra's config into Wandb config")
             config = self._flatten_hydra_config()
             if not config:
                 logging.info(
                     "  Everything already instantiated, nothing is added to config!"
                 )
                 return
-            logging.info(f"  Final Hydra's config has {len(config)} items")
             if WANDB_AVAILABLE and wandb.run:
-                wandb.config.update(config)
+                existing = set(wandb.config.keys())
+                missing = {k: v for k, v in config.items() if k not in existing}
+                if not missing:
+                    logging.info("  Wandb config already has all Hydra config items")
+                    return
+                logging.info(
+                    f"  Adding {len(missing)} missing Hydra config items "
+                    f"({len(config)} total)"
+                )
+                wandb.config.update(missing)
 
     @property
     def instantiated_module(self):

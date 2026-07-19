@@ -15,6 +15,7 @@ Available forward functions:
     - ``dino`` — DINO self-distillation with multi-crop
     - ``dinov2`` — DINOv2 with iBOT masked patch prediction
     - ``lejepa`` — LeJEPA multi-view invariance with SIGReg
+    - ``frozen_backbone_probe`` — frozen backbone for post-hoc probing
     - ``lejepa_linear_probe`` — frozen LeJEPA backbone for post-hoc probing
 
 These are the lightweight composable form of each method. For full
@@ -205,6 +206,37 @@ def lejepa_linear_probe(
     return {
         "loss": output.loss,
         "embedding": output.embedding.detach(),
+        "label": batch["label"].long(),
+    }
+
+
+def frozen_backbone_probe(
+    self, batch: dict[str, Any], stage: str
+) -> dict[str, torch.Tensor]:
+    """Forward function for post-training probes on a frozen backbone.
+
+    Args:
+        self: Module instance with a ``backbone`` attribute.
+        batch: Single-view supervised batch with ``"image"`` and ``"label"``.
+        stage: Lightning stage name.
+
+    Returns:
+        Dictionary containing frozen ``"embedding"``, ``"label"``, and a zero
+        ``"loss"``. Probe callbacks should provide trainable heads/losses.
+    """
+    if not getattr(self, "_frozen_backbone_probe_frozen", False):
+        self.backbone.eval()
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+        self._frozen_backbone_probe_frozen = True
+
+    self.backbone.eval()
+    with torch.no_grad():
+        embedding = self.backbone(batch["image"])
+
+    return {
+        "loss": torch.tensor(0.0, device=embedding.device),
+        "embedding": embedding.detach(),
         "label": batch["label"].long(),
     }
 

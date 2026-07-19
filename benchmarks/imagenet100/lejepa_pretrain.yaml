@@ -73,12 +73,6 @@ module:
     n_slices: ${eval:${oc.env:N_SLICES,1024}}
     n_points: ${eval:${oc.env:N_POINTS,17}}
     t_max: ${eval:${oc.env:T_MAX,3.0}}
-  hparams:
-    method: lejepa
-    dataset: ${oc.env:DATASET_PATH,frgfm/imagenette}
-    encoder_name: ${oc.env:ENCODER_NAME,vit_small_patch16_224}
-    batch_size: ${eval:${oc.env:BATCH_SIZE,128}}
-    devices: ${eval:${oc.env:DEVICES,1}}
   optim:
     optimizer:
       type: AdamW
@@ -100,6 +94,7 @@ data:
   train:
     batch_size: ${eval:${oc.env:BATCH_SIZE,128}}
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
+    prefetch_factor: ${eval:${oc.env:PREFETCH_FACTOR,4}}
     drop_last: true
     shuffle: true
     dataset:
@@ -123,6 +118,7 @@ data:
   val:
     batch_size: ${eval:${oc.env:VAL_BATCH_SIZE,128}}
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
+    prefetch_factor: ${eval:${oc.env:PREFETCH_FACTOR,4}}
     dataset:
       _target_: stable_pretraining.data.HFDataset
       _args_:

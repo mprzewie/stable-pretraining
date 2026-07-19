@@ -141,9 +141,9 @@ def recursive_instantiate(
 def instantiate_from_config(cfg: Union[dict, omegaconf.DictConfig]) -> Any:
     """Main entry point for config-based training.
 
-    This function handles the complete instantiation of a training setup from config:
-    - Recursively instantiates all components
-    - Creates Manager if trainer/module/data are present
+    This function handles the complete setup from config:
+    - Creates Manager from raw trainer/module/data configs when present
+    - Recursively instantiates non-Manager configs
     - Returns appropriate object based on config structure
 
     Args:
@@ -165,24 +165,26 @@ def instantiate_from_config(cfg: Union[dict, omegaconf.DictConfig]) -> Any:
         torch.set_float32_matmul_precision(cfg.matmul_precision)
         rank_zero_warn(f"Set float32 matmul precision to: {cfg.matmul_precision}")
 
-    # Instantiate all components
-    components = recursive_instantiate(cfg)
-
-    # Check if this is a Manager-based config (has trainer, module, data)
-    if all(k in components for k in ["trainer", "module", "data"]):
+    # Check if this is a Manager-based config (has trainer, module, data).
+    # Keep these sections as configs so Manager can both instantiate them and
+    # log their natural Hydra paths, e.g. module.model.sigreg and data.train.*.
+    if all(k in cfg for k in ["trainer", "module", "data"]):
         # Create Manager for training
-        weights_only = components.get(
-            "weights_only", components.get("resume_weights_only", False)
+        weights_only = cfg.get(
+            "weights_only", cfg.get("resume_weights_only", False)
         )
         manager = Manager(
-            trainer=components["trainer"],
-            module=components["module"],
-            data=components["data"],
-            seed=components.get("seed", None),
-            ckpt_path=components.get("ckpt_path", None),
+            trainer=cfg["trainer"],
+            module=cfg["module"],
+            data=cfg["data"],
+            seed=cfg.get("seed", None),
+            ckpt_path=cfg.get("ckpt_path", None),
             weights_only=weights_only,
         )
         return manager
+
+    # Instantiate all components
+    components = recursive_instantiate(cfg)
 
     # Otherwise return the instantiated components
     return components
