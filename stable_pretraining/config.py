@@ -80,6 +80,9 @@ def recursive_instantiate(
     for key in priority_order:
         if key in cfg:
             try:
+                if key == "trainer":
+                    instantiated[key] = cfg[key]
+                    continue
                 if (
                     isinstance(cfg[key], (dict, omegaconf.DictConfig))
                     and "_target_" in cfg[key]
