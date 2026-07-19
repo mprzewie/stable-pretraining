@@ -1708,6 +1708,8 @@ class Manager(submitit.helpers.Checkpointable):
         Returns:
             pl.LightningModule: The instantiated module ready for training.
         """
+        if hasattr(self, "_instantiated_module"):
+            return self._instantiated_module
         if not isinstance(self.module, pl.LightningModule):
             logging.info("  instantiating pl_module...")
             module_conf = self.module
@@ -1741,6 +1743,8 @@ class Manager(submitit.helpers.Checkpointable):
         Returns:
             pl.LightningDataModule: The instantiated data module ready for use.
         """
+        if hasattr(self, "_instantiated_data"):
+            return self._instantiated_data
         if not isinstance(self.data, pl.LightningDataModule):
             self._instantiated_data = hydra.utils.instantiate(
                 self.data, _convert_="object", _recursive_=False
