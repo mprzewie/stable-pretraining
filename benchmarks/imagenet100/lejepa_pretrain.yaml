@@ -104,17 +104,8 @@ data:
       split: ${oc.env:TRAIN_SPLIT,train}
       revision: ${oc.decode:${oc.env:DATASET_REVISION,null}}
       cache_dir: ${oc.env:STABLE_PRETRAINING_DATA_DIR,/tmp/stable-pretraining-data}/${oc.env:DATASET_CACHE_NAME,imagenet10}
-      transform:
-        _target_: stable_pretraining.data.transforms.MultiViewTransform
-        transforms:
-          global_0: ${global_transform}
-          global_1: ${global_transform}
-          local_0: ${local_transform}
-          local_1: ${local_transform}
-          local_2: ${local_transform}
-          local_3: ${local_transform}
-          local_4: ${local_transform}
-          local_5: ${local_transform}
+      transform: ${train_cpu_transform}
+      gpu_transform: ${lejepa_gpu_transform}
   val:
     batch_size: ${eval:${oc.env:VAL_BATCH_SIZE,128}}
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
@@ -193,6 +184,84 @@ eval_transform:
     - _target_: stable_pretraining.data.transforms.CenterCrop
       size: [224, 224]
     - _target_: stable_pretraining.data.transforms.ToImage
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+train_cpu_transform:
+  _target_: stable_pretraining.data.transforms.Compose
+  _args_:
+    - _target_: stable_pretraining.data.transforms.RGB
+    - _target_: stable_pretraining.data.transforms.Resize
+      size: [256, 256]
+    - _target_: stable_pretraining.data.transforms.ToImage
+
+lejepa_gpu_transform:
+  _target_: stable_pretraining.data.gpu_transforms.MultiView
+  chains:
+    global_1: ${global_gpu_transform}
+    global_2: ${global_gpu_transform}
+    local_1: ${local_gpu_transform}
+    local_2: ${local_gpu_transform}
+    local_3: ${local_gpu_transform}
+    local_4: ${local_gpu_transform}
+    local_5: ${local_gpu_transform}
+    local_6: ${local_gpu_transform}
+
+global_gpu_transform:
+  _target_: stable_pretraining.data.gpu_transforms.GPUCompose
+  compile: ${eval:${oc.env:GPU_AUG_COMPILE,0}}
+  transforms:
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomResizedCrop
+      size: 224
+      scale: [0.3, 1.0]
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomHorizontalFlip
+      p: 0.5
+    - _target_: stable_pretraining.data.gpu_transforms.GPUColorJitter
+      brightness: 0.4
+      contrast: 0.4
+      saturation: 0.2
+      hue: 0.1
+      p: 0.8
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomGrayscale
+      p: 0.2
+    - _target_: stable_pretraining.data.gpu_transforms.GPUGaussianBlur
+      kernel_size: 23
+      sigma: [0.1, 2.0]
+      p: 0.5
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomSolarize
+      thresholds: 0.5
+      additions: 0.0
+      p: 0.2
+    - _target_: stable_pretraining.data.gpu_transforms.GPUNormalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+local_gpu_transform:
+  _target_: stable_pretraining.data.gpu_transforms.GPUCompose
+  compile: ${eval:${oc.env:GPU_AUG_COMPILE,0}}
+  transforms:
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomResizedCrop
+      size: 96
+      scale: [0.05, 0.3]
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomHorizontalFlip
+      p: 0.5
+    - _target_: stable_pretraining.data.gpu_transforms.GPUColorJitter
+      brightness: 0.4
+      contrast: 0.4
+      saturation: 0.2
+      hue: 0.1
+      p: 0.8
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomGrayscale
+      p: 0.2
+    - _target_: stable_pretraining.data.gpu_transforms.GPUGaussianBlur
+      kernel_size: 23
+      sigma: [0.1, 2.0]
+      p: 0.5
+    - _target_: stable_pretraining.data.gpu_transforms.GPURandomSolarize
+      thresholds: 0.5
+      additions: 0.0
+      p: 0.2
+    - _target_: stable_pretraining.data.gpu_transforms.GPUNormalize
       mean: [0.485, 0.456, 0.406]
       std: [0.229, 0.224, 0.225]
 

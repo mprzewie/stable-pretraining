@@ -1499,12 +1499,12 @@ class Manager(submitit.helpers.Checkpointable):
         if registry_logger._tags:
             logging.info(f"  tags:    {registry_logger._tags}")
 
-    def _flatten_hydra_config(self) -> dict:
-        """Build a flat dot-separated dict from the raw Hydra configs.
+    def _resolved_hydra_config(self) -> dict:
+        """Build a nested resolved dict from the raw Hydra configs.
 
         Collects top-level Manager run parameters plus ``trainer``, ``module``,
-        and ``data`` DictConfigs, flattens them with ``pd.json_normalize``, and
-        recursively expands lists.
+        and ``data`` DictConfigs. This preserves the natural config structure
+        for loggers that support nested config objects, such as WandB.
         """
         config = {
             "seed": self.seed,
@@ -1518,6 +1518,15 @@ class Manager(submitit.helpers.Checkpointable):
             config["module"] = OmegaConf.to_container(self.module, resolve=True)
         if isinstance(self.data, (dict, DictConfig)):
             config["data"] = OmegaConf.to_container(self.data, resolve=True)
+        return config
+
+    def _flatten_hydra_config(self) -> dict:
+        """Build a flat dot-separated dict from the raw Hydra configs.
+
+        The local registry and Lightning hparams paths are flat/table-oriented,
+        so they keep dot-separated keys even though WandB receives nested config.
+        """
+        config = self._resolved_hydra_config()
         if not config:
             return {}
 
@@ -1668,8 +1677,8 @@ class Manager(submitit.helpers.Checkpointable):
             exp.config.update(last_config)
             logging.info("  reloaded!")
         else:
-            logging.info("  Trying to merge Hydra's config into Wandb config")
-            config = self._flatten_hydra_config()
+            logging.info("  Trying to merge nested Hydra config into Wandb config")
+            config = self._resolved_hydra_config()
             if not config:
                 logging.info(
                     "  Everything already instantiated, nothing is added to config!"
@@ -1682,7 +1691,7 @@ class Manager(submitit.helpers.Checkpointable):
                     logging.info("  Wandb config already has all Hydra config items")
                     return
                 logging.info(
-                    f"  Adding {len(missing)} missing Hydra config items "
+                    f"  Adding {len(missing)} missing top-level Hydra config items "
                     f"({len(config)} total)"
                 )
                 wandb.config.update(missing)
@@ -1701,9 +1710,19 @@ class Manager(submitit.helpers.Checkpointable):
         """
         if not isinstance(self.module, pl.LightningModule):
             logging.info("  instantiating pl_module...")
+            module_conf = self.module
+            if isinstance(self.module, (dict, DictConfig)) and "forward" in self.module:
+                forward = self.module["forward"]
+                if isinstance(forward, str):
+                    module_conf = (
+                        OmegaConf.to_container(self.module, resolve=True)
+                        if isinstance(self.module, DictConfig)
+                        else copy.deepcopy(self.module)
+                    )
+                    module_conf["forward"] = hydra.utils.get_method(forward)
             # with self._trainer.init_module():
             self._instantiated_module = hydra.utils.instantiate(
-                self.module, _convert_="object"
+                module_conf, _convert_="object"
             )
             logging.success("✓ module instantiated")
         else:

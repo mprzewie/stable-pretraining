@@ -726,7 +726,12 @@ class MultiView(nn.Module):
         label_key: str = "label",
     ):
         super().__init__()
-        self.chains = nn.ModuleList(chains)
+        self.is_keys_specified = hasattr(chains, "items")
+        self.chains = (
+            nn.ModuleDict(dict(chains.items()))
+            if self.is_keys_specified
+            else nn.ModuleList(chains)
+        )
         self.source = source
         self.views_key = views_key
         self.label_key = label_key
@@ -734,11 +739,18 @@ class MultiView(nn.Module):
     def forward(self, batch):
         src = batch[self.source]
         label = batch.get(self.label_key)
-        views = []
-        for chain in self.chains:
-            out = chain({self.source: src})[self.source]
-            views.append({"image": out, "label": label})
-        batch[self.views_key] = views
+        if self.is_keys_specified:
+            views = {}
+            for name, chain in self.chains.items():
+                out = chain({self.source: src})[self.source]
+                views[name] = {"image": out, "label": label}
+            return views
+        else:
+            views = []
+            for chain in self.chains:
+                out = chain({self.source: src})[self.source]
+                views.append({"image": out, "label": label})
+            batch[self.views_key] = views
         del batch[self.source]
         return batch
 
