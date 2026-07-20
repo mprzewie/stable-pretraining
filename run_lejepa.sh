@@ -56,6 +56,51 @@ export DATASET_REVISION="${DATASET_REVISION:-${DEFAULT_DATASET_REVISION}}"
 export NUM_CLASSES="${NUM_CLASSES:-${DEFAULT_NUM_CLASSES}}"
 export TRAIN_SPLIT="${TRAIN_SPLIT:-train}"
 export VAL_SPLIT="${VAL_SPLIT:-validation}"
+
+if [[ "${USE_NVME_DATASET:-0}" == "1" ]]; then
+  export LOCAL_SCRATCH="${LOCAL_SCRATCH:-${TMPDIR_LOCAL:-${TMPDIR:-/tmp/${USER:-user}-${SLURM_JOB_ID:-lejepa}}}}"
+  NVME_DATA_ROOT="${LOCAL_SCRATCH}/datasets/stable-pretraining"
+  NVME_HF_HOME="${LOCAL_SCRATCH}/cache/huggingface"
+  mkdir -p "${NVME_DATA_ROOT}" "${NVME_HF_HOME}"
+
+  if [[ "${DATASET_BACKEND:-hf}" == "lance" ]]; then
+    if [[ ! -d "${DATASET_PATH}" ]]; then
+      echo "USE_NVME_DATASET=1 with DATASET_BACKEND=lance requires DATASET_PATH to be an existing directory: ${DATASET_PATH}" >&2
+      exit 2
+    fi
+    NVME_LANCE_PATH="${NVME_DATA_ROOT}/$(basename "${DATASET_PATH}")"
+    if [[ ! -e "${NVME_LANCE_PATH}/.nvme_stage_complete" ]]; then
+      rm -rf "${NVME_LANCE_PATH}"
+      mkdir -p "$(dirname "${NVME_LANCE_PATH}")"
+      cp -a "${DATASET_PATH}" "${NVME_LANCE_PATH}"
+      touch "${NVME_LANCE_PATH}/.nvme_stage_complete"
+    fi
+    export DATASET_PATH="${NVME_LANCE_PATH}"
+  else
+    STORAGE_DATASET_CACHE="${STABLE_PRETRAINING_DATA_DIR}/${DATASET_CACHE_NAME}"
+    NVME_DATASET_CACHE="${NVME_DATA_ROOT}/${DATASET_CACHE_NAME}"
+    if [[ ! -d "${STORAGE_DATASET_CACHE}" ]]; then
+      echo "USE_NVME_DATASET=1 requires an existing storage dataset cache: ${STORAGE_DATASET_CACHE}" >&2
+      exit 2
+    fi
+    if [[ ! -e "${NVME_DATASET_CACHE}/.nvme_stage_complete" ]]; then
+      rm -rf "${NVME_DATASET_CACHE}"
+      mkdir -p "$(dirname "${NVME_DATASET_CACHE}")"
+      cp -a "${STORAGE_DATASET_CACHE}" "${NVME_DATASET_CACHE}"
+      touch "${NVME_DATASET_CACHE}/.nvme_stage_complete"
+    fi
+    export STABLE_PRETRAINING_DATA_DIR="${NVME_DATA_ROOT}"
+  fi
+
+  export HF_HOME="${NVME_HF_HOME}"
+  export HF_HUB_CACHE="${HF_HOME}/hub"
+  export HF_DATASETS_CACHE="${HF_HOME}/datasets"
+  export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
+  echo "NVME dataset staging enabled: LOCAL_SCRATCH=${LOCAL_SCRATCH}"
+  echo "STABLE_PRETRAINING_DATA_DIR=${STABLE_PRETRAINING_DATA_DIR}"
+  echo "DATASET_PATH=${DATASET_PATH}"
+fi
+
 export SEED="${SEED:-42}"
 export RUN_GROUP="${RUN_GROUP:-${METHOD}-vits-${DEFAULT_RUN_DATASET}-e${EPOCHS:-20}-g${DEVICES:-1}}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-${STORAGE_ROOT}/results/le/stable_pretraining/${RUN_GROUP}}"
@@ -150,6 +195,15 @@ build_logger_args() {
     )
   elif [[ "${LOGGER}" == "none" ]]; then
     LOGGER_ARGS=("trainer.logger=false")
+  fi
+
+  if [[ "${TRAINER_PROFILER:-}" == "advanced" ]]; then
+    LOGGER_ARGS+=("+trainer.profiler=advanced")
+  elif [[ "${TRAINER_PROFILER:-}" == "simple" ]]; then
+    LOGGER_ARGS+=("+trainer.profiler=simple")
+  elif [[ -n "${TRAINER_PROFILER:-}" && "${TRAINER_PROFILER:-}" != "none" ]]; then
+    echo "Unknown TRAINER_PROFILER=${TRAINER_PROFILER}; expected advanced, simple, none, or unset." >&2
+    exit 2
   fi
 }
 

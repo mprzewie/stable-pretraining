@@ -59,11 +59,13 @@ Top-level pieces:
   aren't taxed.
 - :class:`GPUCompose` chains a list of GPU transforms and (by default)
   wraps each tensor op in ``torch.compile`` for kernel fusion.
-- :class:`StackedMultiView` / :class:`MultiView` produce N augmented
-  views from one source tensor: the stacked variant runs a single chain
-  on a ``(N*B, ...)`` tensor (symmetric SSL — Barlow Twins, SimCLR,
-  VICReg, NNCLR) and is ~1.2× faster than the per-view variant; the
-  per-view variant supports asymmetric recipes (BYOL, DINO
+- :class:`StackedMultiView` / :class:`GroupedMultiView` /
+  :class:`MultiView` produce N augmented views from one source tensor:
+  the stacked variant runs a single chain on a ``(N*B, ...)`` tensor
+  (symmetric SSL — Barlow Twins, SimCLR, VICReg, NNCLR) and is ~1.2×
+  faster than the per-view variant; the grouped variant batches repeated
+  asymmetric recipes (e.g. two global crops plus six local crops); the
+  per-view variant supports fully asymmetric recipes (BYOL, DINO
   student/teacher).
 
 The concrete kornia-backed wrappers (:class:`GPUNormalize`,
@@ -703,6 +705,110 @@ class StackedMultiView(nn.Module):
         return batch
 
 
+class GroupedMultiView(nn.Module):
+    """Run repeated view recipes in grouped stacked batches.
+
+    This is the fast path for asymmetric SSL recipes that reuse a small
+    number of augmentation chains. For example, LeJEPA often uses two
+    global views with one recipe and six local views with another recipe.
+    ``GroupedMultiView`` runs the global chain once on ``(2*B, ...)`` and
+    the local chain once on ``(6*B, ...)``, then splits outputs back into
+    the original view names.
+
+    ``groups`` may be either a mapping of ``group_name -> {chain, names}``
+    or a sequence of such group dicts. With named groups, the output is a
+    direct dict of named views, matching :class:`MultiView`'s named-chain
+    behavior. With sequence groups, the output is stored under
+    ``batch[views_key]`` as a list.
+    """
+
+    def __init__(
+        self,
+        groups,
+        source: str = "image",
+        views_key: str = "views",
+        label_key: str = "label",
+    ):
+        super().__init__()
+        self.is_keys_specified = hasattr(groups, "items")
+        self.source = source
+        self.views_key = views_key
+        self.label_key = label_key
+
+        if self.is_keys_specified:
+            self.group_names = list(groups.keys())
+            self.names_by_group = {}
+            chains = {}
+            for group_name, spec in groups.items():
+                names, chain = self._parse_group_spec(group_name, spec)
+                self.names_by_group[group_name] = names
+                chains[group_name] = chain
+            self.chains = nn.ModuleDict(chains)
+        else:
+            self.group_names = [str(i) for i, _ in enumerate(groups)]
+            self.names_by_group = {}
+            chains = {}
+            for group_name, spec in zip(self.group_names, groups):
+                names, chain = self._parse_group_spec(group_name, spec)
+                self.names_by_group[group_name] = names
+                chains[group_name] = chain
+            self.chains = nn.ModuleDict(chains)
+
+    @staticmethod
+    def _parse_group_spec(group_name, spec):
+        if not hasattr(spec, "get"):
+            raise TypeError(
+                "GroupedMultiView groups must be mappings with 'chain' and 'names'; "
+                f"got {type(spec)!r} for group {group_name!r}."
+            )
+        if "chain" not in spec:
+            raise ValueError(f"GroupedMultiView group {group_name!r} is missing 'chain'.")
+        names = spec.get("names")
+        if names is None:
+            n_views = spec.get("n_views")
+            if n_views is None:
+                raise ValueError(
+                    f"GroupedMultiView group {group_name!r} needs 'names' or 'n_views'."
+                )
+            names = [None] * int(n_views)
+        else:
+            names = list(names)
+        if len(names) == 0:
+            raise ValueError(f"GroupedMultiView group {group_name!r} has no views.")
+        return names, spec["chain"]
+
+    def _run_group(self, src: torch.Tensor, chain: nn.Module, names: list, label):
+        batch_size = src.shape[0]
+        stacked = src.repeat(len(names), *([1] * (src.ndim - 1)))
+        out = chain({self.source: stacked})[self.source]
+        views = torch.split(out, batch_size, dim=0)
+        return [
+            (name, {"image": view, "label": label})
+            for name, view in zip(names, views)
+        ]
+
+    def forward(self, batch):
+        src = batch[self.source]
+        label = batch.get(self.label_key)
+        grouped_views = []
+        for group_name in self.group_names:
+            grouped_views.extend(
+                self._run_group(
+                    src=src,
+                    chain=self.chains[group_name],
+                    names=self.names_by_group[group_name],
+                    label=label,
+                )
+            )
+
+        if self.is_keys_specified:
+            return {name: view for name, view in grouped_views}
+
+        batch[self.views_key] = [view for _, view in grouped_views]
+        del batch[self.source]
+        return batch
+
+
 class MultiView(nn.Module):
     """Run a list of per-view chains on the same source batch (asymmetric SSL).
 
@@ -767,5 +873,6 @@ __all__ = [
     "GPURandomSolarize",
     "GPURandomErasing",
     "StackedMultiView",
+    "GroupedMultiView",
     "MultiView",
 ]

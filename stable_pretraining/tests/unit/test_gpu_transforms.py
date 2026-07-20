@@ -382,6 +382,71 @@ class TestStackedMultiView:
 
 
 @pytest.mark.unit
+class TestGroupedMultiView:
+    """Grouped chains for repeated asymmetric SSL view recipes."""
+
+    class _ScaleAndCount(torch.nn.Module):
+        def __init__(self, scale):
+            super().__init__()
+            self.scale = scale
+            self.calls = 0
+            self.batch_sizes = []
+
+        def forward(self, batch):
+            self.calls += 1
+            self.batch_sizes.append(batch["image"].shape[0])
+            batch["image"] = batch["image"] * self.scale
+            return batch
+
+    def test_named_groups_preserve_direct_view_dict_schema(self):
+        global_chain = self._ScaleAndCount(2.0)
+        local_chain = self._ScaleAndCount(3.0)
+        grouped = gt.GroupedMultiView(
+            {
+                "global": {"chain": global_chain, "names": ["global_1", "global_2"]},
+                "local": {
+                    "chain": local_chain,
+                    "names": ["local_1", "local_2", "local_3"],
+                },
+            }
+        )
+
+        x = torch.ones(4, 3, 8, 8)
+        label = torch.arange(4)
+        out = grouped({"image": x, "label": label})
+
+        assert set(out) == {"global_1", "global_2", "local_1", "local_2", "local_3"}
+        assert global_chain.calls == 1
+        assert local_chain.calls == 1
+        assert global_chain.batch_sizes == [8]
+        assert local_chain.batch_sizes == [12]
+        assert torch.allclose(out["global_1"]["image"], torch.full_like(x, 2.0))
+        assert torch.allclose(out["local_3"]["image"], torch.full_like(x, 3.0))
+        assert torch.equal(out["global_2"]["label"], label)
+
+    def test_sequence_groups_return_views_list(self):
+        chain_a = self._ScaleAndCount(0.5)
+        chain_b = self._ScaleAndCount(4.0)
+        grouped = gt.GroupedMultiView(
+            [
+                {"chain": chain_a, "n_views": 2},
+                {"chain": chain_b, "n_views": 1},
+            ]
+        )
+
+        x = torch.ones(2, 3, 4, 4)
+        out = grouped({"image": x})
+
+        assert "views" in out
+        assert "image" not in out
+        assert len(out["views"]) == 3
+        assert chain_a.batch_sizes == [4]
+        assert chain_b.batch_sizes == [2]
+        assert torch.allclose(out["views"][0]["image"], torch.full_like(x, 0.5))
+        assert torch.allclose(out["views"][2]["image"], torch.full_like(x, 4.0))
+
+
+@pytest.mark.unit
 class TestMultiView:
     """Per-view chains for asymmetric SSL (BYOL, DINO student/teacher)."""
 

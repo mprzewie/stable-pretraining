@@ -196,16 +196,14 @@ train_cpu_transform:
     - _target_: stable_pretraining.data.transforms.ToImage
 
 lejepa_gpu_transform:
-  _target_: stable_pretraining.data.gpu_transforms.MultiView
-  chains:
-    global_1: ${global_gpu_transform}
-    global_2: ${global_gpu_transform}
-    local_1: ${local_gpu_transform}
-    local_2: ${local_gpu_transform}
-    local_3: ${local_gpu_transform}
-    local_4: ${local_gpu_transform}
-    local_5: ${local_gpu_transform}
-    local_6: ${local_gpu_transform}
+  _target_: stable_pretraining.data.gpu_transforms.GroupedMultiView
+  groups:
+    global:
+      chain: ${global_gpu_transform}
+      names: [global_1, global_2]
+    local:
+      chain: ${local_gpu_transform}
+      names: [local_1, local_2, local_3, local_4, local_5, local_6]
 
 global_gpu_transform:
   _target_: stable_pretraining.data.gpu_transforms.GPUCompose
