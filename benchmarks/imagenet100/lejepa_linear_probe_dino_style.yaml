@@ -2,48 +2,43 @@ seed: ${eval:${oc.env:SEED,42}}
 
 trainer:
   _target_: lightning.Trainer
-  max_epochs: ${eval:${oc.env:PROBE_EPOCHS,20}}
+  max_epochs: ${eval:${oc.env:DINO_PROBE_EPOCHS,-1}}
+  max_steps: ${eval:${oc.env:DINO_PROBE_MAX_STEPS,12500}}
+  check_val_every_n_epoch: null
+  val_check_interval: ${eval:${oc.env:DINO_PROBE_VAL_CHECK_INTERVAL,1250}}
   accelerator: ${oc.env:ACCELERATOR,gpu}
   devices: ${eval:${oc.env:DEVICES,1}}
   strategy: ${oc.env:PROBE_STRATEGY,auto}
   precision: ${oc.env:PRECISION,16-mixed}
   num_sanity_val_steps: 0
   sync_batchnorm: ${eval:${oc.env:SYNC_BATCHNORM,0}}
-  default_root_dir: ${oc.env:PROBE_OUTPUT_DIR,${oc.env:OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa-probe}}
+  default_root_dir: ${oc.env:DINO_PROBE_OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa-probe-dino-style}
   callbacks:
-    - _target_: stable_pretraining.callbacks.OnlineProbe
+    - _target_: stable_pretraining.callbacks.DinoStyleLinearProbe
       _partial_: true
-      name: linear_probe_simple
-      input: embedding
+      name: linear_probe_dinov3_style
       target: label
+      num_classes: ${eval:${oc.env:NUM_CLASSES,10}}
+      embed_dim: ${eval:${oc.env:EMBED_DIM,384}}
+      learning_rates: ${oc.decode:${oc.env:DINO_PROBE_LRS,[1e-5,2e-5,5e-5,1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,0.1]}}
+      n_last_blocks: ${oc.decode:${oc.env:DINO_PROBE_N_LAST_BLOCKS,[1,2,4]}}
+      pools: ${oc.decode:${oc.env:DINO_PROBE_POOLS,[cls,avgpool]}}
+      batch_size: ${eval:${oc.env:PROBE_BATCH_SIZE,128}}
+      lr_scale_base: ${eval:${oc.env:DINO_PROBE_LR_SCALE_BASE,256}}
+      optimizers: ${oc.decode:${oc.env:DINO_PROBE_OPTIMIZERS,[sgd,adamw]}}
+      momentum: ${eval:${oc.env:DINO_PROBE_MOMENTUM,0.9}}
+      weight_decay: ${eval:${oc.env:DINO_PROBE_WEIGHT_DECAY,0.0}}
+      adamw_weight_decay: ${eval:${oc.env:DINO_PROBE_ADAMW_WEIGHT_DECAY,0.0}}
       eval_dataset_name: ${oc.env:EVAL_DATASET_NAME,imagenet10}
       in_domain_dataset_name: ${oc.env:IN_DOMAIN_DATASET_NAME,${oc.env:DATASET_CACHE_NAME,imagenet10}}
-      probe:
-        _target_: torch.nn.Linear
-        in_features: ${eval:${oc.env:EMBED_DIM,384}}
-        out_features: ${eval:${oc.env:NUM_CLASSES,10}}
-      loss:
-        _target_: torch.nn.CrossEntropyLoss
-      metrics:
-        top1:
-          _target_: torchmetrics.classification.MulticlassAccuracy
-          num_classes: ${eval:${oc.env:NUM_CLASSES,10}}
-        top5:
-          _target_: torchmetrics.classification.MulticlassAccuracy
-          num_classes: ${eval:${oc.env:NUM_CLASSES,10}}
-          top_k: 5
-      optimizer:
-        type: AdamW
-        lr: ${eval:${oc.env:PROBE_LR,0.03}}
-        weight_decay: ${eval:${oc.env:PROBE_WEIGHT_DECAY,1e-6}}
   logger:
     _target_: lightning.pytorch.loggers.CSVLogger
-    save_dir: ${oc.env:PROBE_OUTPUT_DIR,${oc.env:OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa-probe}}/logs
-    name: linear_probe
+    save_dir: ${oc.env:DINO_PROBE_OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa-probe-dino-style}/logs
+    name: linear_probe_dinov3_style
 
 module:
   _target_: stable_pretraining.Module
-  forward: stable_pretraining.forward.frozen_backbone_probe
+  forward: stable_pretraining.forward.frozen_backbone_probe_labels
   backbone:
     _target_: stable_pretraining.backbone.from_timm_checkpoint
     model_name: ${oc.env:ENCODER_NAME,vit_small_patch16_224}
@@ -71,7 +66,7 @@ data:
       cache_dir: ${oc.env:STABLE_PRETRAINING_DATA_DIR,/tmp/stable-pretraining-data}/${oc.env:DATASET_CACHE_NAME,imagenet10}
       rename_columns: ${oc.decode:${oc.env:RENAME_COLUMNS,null}}
       remove_columns: ${oc.decode:${oc.env:REMOVE_COLUMNS,null}}
-      transform: ${eval_transform}
+      transform: ${train_transform}
   val:
     batch_size: ${eval:${oc.env:VAL_BATCH_SIZE,128}}
     num_workers: ${eval:${oc.env:NUM_WORKERS,8}}
@@ -86,6 +81,20 @@ data:
       rename_columns: ${oc.decode:${oc.env:RENAME_COLUMNS,null}}
       remove_columns: ${oc.decode:${oc.env:REMOVE_COLUMNS,null}}
       transform: ${eval_transform}
+
+train_transform:
+  _target_: stable_pretraining.data.transforms.Compose
+  _args_:
+    - _target_: stable_pretraining.data.transforms.RGB
+    - _target_: stable_pretraining.data.transforms.RandomResizedCrop
+      size: [224, 224]
+      scale:
+        - ${eval:${oc.env:DINO_PROBE_RRC_SCALE_MIN,0.08}}
+        - ${eval:${oc.env:DINO_PROBE_RRC_SCALE_MAX,1.0}}
+    - _target_: stable_pretraining.data.transforms.RandomHorizontalFlip
+    - _target_: stable_pretraining.data.transforms.ToImage
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
 
 eval_transform:
   _target_: stable_pretraining.data.transforms.Compose

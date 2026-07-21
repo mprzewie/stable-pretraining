@@ -265,7 +265,13 @@ class LeJEPA(Module):
             drop_path_rate=drop_path_rate,
         )
 
-        embed_dim = self.backbone.embed_dim
+        embed_dim = getattr(self.backbone, "embed_dim", None)
+        if embed_dim is None:
+            embed_dim = getattr(self.backbone, "num_features", None)
+        if embed_dim is None:
+            raise AttributeError(
+                f"Backbone {encoder_name!r} exposes neither embed_dim nor num_features."
+            )
 
         if projector is None:
             projector = nn.Sequential(

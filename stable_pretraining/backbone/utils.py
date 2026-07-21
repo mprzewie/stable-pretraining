@@ -680,6 +680,9 @@ def from_huggingface(model_name, pretrained, attn_implementation="sdpa", **kwarg
 def from_timm(model_name, low_resolution=False, **kwargs):
     import timm
 
+    if "vit" not in model_name.lower():
+        kwargs.pop("dynamic_img_size", None)
+
     model = timm.create_model(model_name, **kwargs)
     if low_resolution:  # reduce resolution, for instance for CIFAR
         if "resnet" in model_name:

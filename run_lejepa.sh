@@ -4,11 +4,13 @@ set -x
 
 ROOT_DIR="${ROOT_DIR:-$(pwd)}"
 
-# Core run selection. STAGE can be: pretrain, probe, both.
+# Core run selection. STAGE can be: pretrain, probe, probe_simple, probe_dino,
+# probe_all, both, both_simple, both_dino, both_all.
 export METHOD="${METHOD:-lejepa}"
 export STAGE="${STAGE:-both}"
 export PRETRAIN_CONFIG="${PRETRAIN_CONFIG:-${ROOT_DIR}/benchmarks/imagenet100/lejepa_pretrain.yaml}"
 export PROBE_CONFIG="${PROBE_CONFIG:-${ROOT_DIR}/benchmarks/imagenet100/lejepa_linear_probe.yaml}"
+export DINO_PROBE_CONFIG="${DINO_PROBE_CONFIG:-${ROOT_DIR}/benchmarks/imagenet100/lejepa_linear_probe_dino_style.yaml}"
 
 # Dataset and output locations. DATASET selects a preset; low-level vars below
 # remain overrideable for custom datasets.
@@ -56,6 +58,8 @@ export DATASET_REVISION="${DATASET_REVISION:-${DEFAULT_DATASET_REVISION}}"
 export NUM_CLASSES="${NUM_CLASSES:-${DEFAULT_NUM_CLASSES}}"
 export TRAIN_SPLIT="${TRAIN_SPLIT:-train}"
 export VAL_SPLIT="${VAL_SPLIT:-validation}"
+export EVAL_DATASET_NAME="${EVAL_DATASET_NAME:-${DATASET_CACHE_NAME}}"
+export IN_DOMAIN_DATASET_NAME="${IN_DOMAIN_DATASET_NAME:-${DATASET_CACHE_NAME}}"
 
 if [[ "${USE_NVME_DATASET:-0}" == "1" ]]; then
   export LOCAL_SCRATCH="${LOCAL_SCRATCH:-${TMPDIR_LOCAL:-${TMPDIR:-/tmp/${USER:-user}-${SLURM_JOB_ID:-lejepa}}}}"
@@ -106,6 +110,7 @@ export RUN_GROUP="${RUN_GROUP:-${METHOD}-vits-${DEFAULT_RUN_DATASET}-e${EPOCHS:-
 export OUTPUT_ROOT="${OUTPUT_ROOT:-${STORAGE_ROOT}/results/le/stable_pretraining/${RUN_GROUP}}"
 export OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_ROOT}/seed${SEED}}"
 export PROBE_OUTPUT_DIR="${PROBE_OUTPUT_DIR:-${OUTPUT_DIR}/linear_probe}"
+export DINO_PROBE_OUTPUT_DIR="${DINO_PROBE_OUTPUT_DIR:-${OUTPUT_DIR}/linear_probe_dino_style}"
 export SPT_CACHE_DIR="${SPT_CACHE_DIR:-${STORAGE_ROOT}/results/le/stable_pretraining/.cache}"
 export RUN_MANIFEST="${RUN_MANIFEST:-${OUTPUT_DIR}/pretrain_run.yaml}"
 export CONFIG_ARCHIVE_DIR="${CONFIG_ARCHIVE_DIR:-${OUTPUT_DIR}/configs}"
@@ -153,6 +158,15 @@ export PROBE_EPOCHS="${PROBE_EPOCHS:-20}"
 export PROBE_BATCH_SIZE="${PROBE_BATCH_SIZE:-${BATCH_SIZE}}"
 export PROBE_LR="${PROBE_LR:-0.03}"
 export PROBE_WEIGHT_DECAY="${PROBE_WEIGHT_DECAY:-1e-6}"
+export DINO_PROBE_EPOCHS="${DINO_PROBE_EPOCHS:--1}"
+export DINO_PROBE_MAX_STEPS="${DINO_PROBE_MAX_STEPS:-12500}"
+export DINO_PROBE_VAL_CHECK_INTERVAL="${DINO_PROBE_VAL_CHECK_INTERVAL:-1250}"
+export DINO_PROBE_LRS="${DINO_PROBE_LRS:-[1e-5,2e-5,5e-5,1e-4,2e-4,5e-4,1e-3,2e-3,5e-3,1e-2,2e-2,5e-2,0.1]}"
+export DINO_PROBE_N_LAST_BLOCKS="${DINO_PROBE_N_LAST_BLOCKS:-[1,2,4]}"
+export DINO_PROBE_POOLS="${DINO_PROBE_POOLS:-[cls,avgpool]}"
+export DINO_PROBE_OPTIMIZERS="${DINO_PROBE_OPTIMIZERS:-[sgd,adamw]}"
+export DINO_PROBE_RRC_SCALE_MIN="${DINO_PROBE_RRC_SCALE_MIN:-0.08}"
+export DINO_PROBE_RRC_SCALE_MAX="${DINO_PROBE_RRC_SCALE_MAX:-1.0}"
 export BACKBONE_CKPT="${BACKBONE_CKPT:-${OUTPUT_DIR}/backbone.pt}"
 # Set CKPT_PATH=/absolute/path/to/last.ckpt when exporting a backbone from
 # an existing pretraining run without a manifest.
@@ -164,7 +178,7 @@ export WANDB_PROJECT="${WANDB_PROJECT:-spt_cw_jepa}"
 export WANDB_GROUP="${WANDB_GROUP:-${RUN_GROUP}}"
 export WANDB_BASE_TAGS="${WANDB_BASE_TAGS:-${WANDB_TAGS:-}}"
 
-mkdir -p "${OUTPUT_DIR}" "${PROBE_OUTPUT_DIR}" "${CONFIG_ARCHIVE_DIR}"
+mkdir -p "${OUTPUT_DIR}" "${PROBE_OUTPUT_DIR}" "${DINO_PROBE_OUTPUT_DIR}" "${CONFIG_ARCHIVE_DIR}"
 
 LOGGER_ARGS=()
 build_logger_args() {
@@ -326,8 +340,14 @@ run_pretrain() {
   echo "Backbone checkpoint: ${BACKBONE_CKPT}"
 }
 
-run_probe() {
+prepare_probe_backbone() {
   local source_ckpt manifest_backbone
+  if [[ -n "${PROBE_TRAIN_SPLIT:-}" ]]; then
+    export TRAIN_SPLIT="${PROBE_TRAIN_SPLIT}"
+  fi
+  if [[ -n "${PROBE_VAL_SPLIT:-}" ]]; then
+    export VAL_SPLIT="${PROBE_VAL_SPLIT}"
+  fi
   if [[ ! -f "${BACKBONE_CKPT}" ]]; then
     if [[ -f "${RUN_MANIFEST}" ]]; then
       manifest_backbone="$(manifest_value backbone_ckpt "${RUN_MANIFEST}")"
@@ -367,6 +387,10 @@ run_probe() {
   if [[ -z "$(manifest_value backbone_ckpt "${RUN_MANIFEST}" 2>/dev/null || true)" && -f "${RUN_MANIFEST}" ]]; then
     printf 'backbone_ckpt: %s\n' "${BACKBONE_CKPT}" >> "${RUN_MANIFEST}"
   fi
+}
+
+run_probe() {
+  prepare_probe_backbone
   if [[ ! -f "${PROBE_CONFIG}" ]]; then
     echo "Missing probe config: ${PROBE_CONFIG}" >&2
     echo "ROOT_DIR=${ROOT_DIR}" >&2
@@ -378,24 +402,54 @@ run_probe() {
   spt run "${PROBE_CONFIG}" "${LOGGER_ARGS[@]}"
 }
 
+run_dino_probe() {
+  prepare_probe_backbone
+  if [[ ! -f "${DINO_PROBE_CONFIG}" ]]; then
+    echo "Missing DINO-style probe config: ${DINO_PROBE_CONFIG}" >&2
+    echo "ROOT_DIR=${ROOT_DIR}" >&2
+    echo "SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-}" >&2
+    exit 1
+  fi
+  cp "${DINO_PROBE_CONFIG}" "${CONFIG_ARCHIVE_DIR}/linear_probe_dino_style.yaml"
+  build_logger_args probe_dino
+  spt run "${DINO_PROBE_CONFIG}" "${LOGGER_ARGS[@]}"
+}
+
 echo "Running ${METHOD} ${STAGE} on ${DATASET_PATH}"
 echo "Output: ${OUTPUT_DIR}"
 echo "Pretrain config: ${PRETRAIN_CONFIG}"
 echo "Probe config: ${PROBE_CONFIG}"
+echo "DINO-style probe config: ${DINO_PROBE_CONFIG}"
 
 case "${STAGE}" in
   pretrain)
     run_pretrain
     ;;
-  probe)
+  probe|probe_all)
+    run_probe
+    run_dino_probe
+    ;;
+  probe_simple)
     run_probe
     ;;
-  both)
+  probe_dino)
+    run_dino_probe
+    ;;
+  both|both_all)
+    run_pretrain
+    run_probe
+    run_dino_probe
+    ;;
+  both_simple)
     run_pretrain
     run_probe
     ;;
+  both_dino)
+    run_pretrain
+    run_dino_probe
+    ;;
   *)
-    echo "Unknown STAGE=${STAGE}; expected pretrain, probe, or both." >&2
+    echo "Unknown STAGE=${STAGE}; expected pretrain, probe, probe_simple, probe_dino, probe_all, both, both_simple, both_dino, or both_all." >&2
     exit 2
     ;;
 esac

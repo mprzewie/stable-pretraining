@@ -241,6 +241,31 @@ def frozen_backbone_probe(
     }
 
 
+def frozen_backbone_probe_labels(
+    self, batch: dict[str, Any], stage: str
+) -> dict[str, torch.Tensor]:
+    """Forward function for callbacks that own frozen-backbone feature extraction.
+
+    Args:
+        self: Module instance with a ``backbone`` attribute.
+        batch: Supervised batch with ``"image"`` and ``"label"``.
+        stage: Lightning stage name.
+
+    Returns:
+        Dictionary containing ``"label"`` and a zero ``"loss"``.
+    """
+    if not getattr(self, "_frozen_backbone_probe_frozen", False):
+        self.backbone.eval()
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+        self._frozen_backbone_probe_frozen = True
+
+    return {
+        "loss": torch.tensor(0.0, device=batch["image"].device),
+        "label": batch["label"].long(),
+    }
+
+
 def supervised(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
     """Forward function for standard supervised training.
 

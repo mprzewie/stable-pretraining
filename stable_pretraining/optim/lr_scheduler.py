@@ -181,13 +181,12 @@ def create_scheduler(
         raise ValueError(
             f"Scheduler '{scheduler_type}' not found in torch.optim.lr_scheduler or stable_pretraining.optim.lr_scheduler."
         )
-    # If no params provided, use smart defaults if known
-    if not params:
-        name = fn.__name__ if hasattr(fn, "__name__") else str(fn)
-        try:
-            params = _build_default_params(name, module, optimizer)
-        except Exception:
-            params = {}
+    name = fn.__name__ if hasattr(fn, "__name__") else str(fn)
+    try:
+        defaults = _build_default_params(name, module, optimizer)
+    except Exception:
+        defaults = {}
+    params = {**defaults, **params}
 
     # Instantiate. Works for both torch classes and our function factories.
     return fn(optimizer, **params)

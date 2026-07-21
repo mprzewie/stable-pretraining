@@ -443,33 +443,47 @@ class TrainableCallback(Callback):
                 schedulers = []
             else:
                 optimizers, schedulers = outputs
-            # assert callback.name not in self._optimizer_name_to_index
-            assert callback.name not in self._optimizer_frequencies
-            # assert callback.name not in self._optimizer_names
-            assert callback.name not in self._optimizer_gradient_clip_val
-            assert callback.name not in self._optimizer_gradient_clip_algorithm
-            assert len(optimizers) not in self._optimizer_index_to_name
-            self._optimizer_index_to_name[len(optimizers)] = callback.name
-            # Mark this optimizer as callback-owned. ``Module.training_step``
-            # uses this to step the underlying ``torch.optim.Optimizer``
-            # rather than the ``LightningOptimizer`` wrapper, so
-            # ``trainer.global_step`` is not advanced by every callback
-            # optimizer (which would otherwise break ``Trainer(max_steps=...)``
-            # and step-based schedulers when many callbacks are attached).
-            self._callback_optimizer_names.add(callback.name)
-            # self._optimizer_name_to_index[callback.name] = len(self._optimizer_names)
-            # self._optimizer_names.append(callback.name)
-            self._optimizer_frequencies[callback.name] = (
-                callback.accumulate_grad_batches
+            callback_optimizers = callback.setup_optimizer(self)
+            if not isinstance(callback_optimizers, (list, tuple)):
+                callback_optimizers = [callback_optimizers]
+            scheduler_input = (
+                callback_optimizers[0]
+                if len(callback_optimizers) == 1
+                else callback_optimizers
             )
-            self._optimizer_gradient_clip_val[callback.name] = (
-                callback.gradient_clip_val
-            )
-            self._optimizer_gradient_clip_algorithm[callback.name] = (
-                callback.gradient_clip_algorithm
-            )
-            optimizers.append(callback.setup_optimizer(self))
-            schedulers.append(callback.setup_scheduler(optimizers[-1], self))
+            callback_schedulers = callback.setup_scheduler(scheduler_input, self)
+            if not isinstance(callback_schedulers, (list, tuple)):
+                callback_schedulers = [callback_schedulers]
+            if len(callback_optimizers) != len(callback_schedulers):
+                raise ValueError(
+                    f"{callback.name} returned {len(callback_optimizers)} optimizers "
+                    f"but {len(callback_schedulers)} schedulers."
+                )
+            for opt_idx, (opt, sched) in enumerate(
+                zip(callback_optimizers, callback_schedulers)
+            ):
+                opt_name = (
+                    callback.name
+                    if len(callback_optimizers) == 1
+                    else f"{callback.name}_{opt_idx}"
+                )
+                assert opt_name not in self._optimizer_frequencies
+                assert opt_name not in self._optimizer_gradient_clip_val
+                assert opt_name not in self._optimizer_gradient_clip_algorithm
+                assert len(optimizers) not in self._optimizer_index_to_name
+                self._optimizer_index_to_name[len(optimizers)] = opt_name
+                self._callback_optimizer_names.add(opt_name)
+                self._optimizer_frequencies[opt_name] = (
+                    callback.accumulate_grad_batches
+                )
+                self._optimizer_gradient_clip_val[opt_name] = (
+                    callback.gradient_clip_val
+                )
+                self._optimizer_gradient_clip_algorithm[opt_name] = (
+                    callback.gradient_clip_algorithm
+                )
+                optimizers.append(opt)
+                schedulers.append(sched)
             return optimizers, schedulers
 
         # Bind the new method to the instance

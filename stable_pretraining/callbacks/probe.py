@@ -86,6 +86,8 @@ class OnlineProbe(TrainableCallback):
         gradient_clip_val: float = None,
         gradient_clip_algorithm: str = "norm",
         metrics: Optional[Union[dict, tuple, list, torchmetrics.Metric]] = None,
+        eval_dataset_name: Optional[str] = None,
+        in_domain_dataset_name: Optional[str] = None,
         verbose: bool = None,
     ) -> None:
         from .utils import resolve_verbose
@@ -96,6 +98,8 @@ class OnlineProbe(TrainableCallback):
         if loss is None:
             logging.warning(f"Not loss given to {name}, will use output of `probe`")
         self.loss = loss
+        self.eval_dataset_name = eval_dataset_name
+        self.in_domain_dataset_name = in_domain_dataset_name
         self.verbose = resolve_verbose(verbose)
 
         # Store probe configuration for later initialization
@@ -185,7 +189,8 @@ class OnlineProbe(TrainableCallback):
                 my_metrics = pl_module.callbacks_metrics[callback.name]["_val"]
                 for metric_name, metric in my_metrics.items():
                     metric(preds, y)
-                    metric_logs[f"eval/{callback.name}_{metric_name}"] = metric
+                    if callback.eval_dataset_name is None:
+                        metric_logs[f"eval/{callback.name}_{metric_name}"] = metric
 
             # Raw scalars (loss): sync across GPUs
             if scalar_logs:
@@ -197,3 +202,19 @@ class OnlineProbe(TrainableCallback):
 
         # Bind the new method to the instance
         pl_module.forward = types.MethodType(new_forward, pl_module)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if self.eval_dataset_name is None:
+            return
+        metrics = pl_module.callbacks_metrics[self.name]["_val"]
+        logs = {}
+        for metric_name, metric in metrics.items():
+            value = metric.compute()
+            logs[
+                f"eval/{self.name}_{metric_name}_epoch/{self.eval_dataset_name}"
+            ] = value
+            if self.eval_dataset_name == self.in_domain_dataset_name:
+                logs[f"eval/{self.name}_{metric_name}_epoch/in-domain"] = value
+            metric.reset()
+        if logs:
+            pl_module.log_dict(logs, on_step=False, on_epoch=True, sync_dist=False)

@@ -83,7 +83,6 @@ module:
         - ${eval:${oc.env:ADAM_BETA2,0.999}}
     scheduler:
       type: LinearWarmupCosineAnnealing
-      total_steps: ${eval:${oc.env:TOTAL_STEPS,1460}}
       peak_step: ${eval:${oc.env:WARMUP_FRACTION,0.1}}
       start_factor: ${eval:${oc.env:START_FACTOR,0.01}}
       end_lr: ${eval:${oc.env:END_LR,4e-6}}
@@ -104,6 +103,8 @@ data:
       split: ${oc.env:TRAIN_SPLIT,train}
       revision: ${oc.decode:${oc.env:DATASET_REVISION,null}}
       cache_dir: ${oc.env:STABLE_PRETRAINING_DATA_DIR,/tmp/stable-pretraining-data}/${oc.env:DATASET_CACHE_NAME,imagenet10}
+      rename_columns: ${oc.decode:${oc.env:RENAME_COLUMNS,null}}
+      remove_columns: ${oc.decode:${oc.env:REMOVE_COLUMNS,null}}
       transform: ${train_cpu_transform}
       gpu_transform: ${lejepa_gpu_transform}
   val:
@@ -117,6 +118,8 @@ data:
       split: ${oc.env:VAL_SPLIT,validation}
       revision: ${oc.decode:${oc.env:DATASET_REVISION,null}}
       cache_dir: ${oc.env:STABLE_PRETRAINING_DATA_DIR,/tmp/stable-pretraining-data}/${oc.env:DATASET_CACHE_NAME,imagenet10}
+      rename_columns: ${oc.decode:${oc.env:RENAME_COLUMNS,null}}
+      remove_columns: ${oc.decode:${oc.env:REMOVE_COLUMNS,null}}
       transform: ${eval_transform}
 
 global_transform:

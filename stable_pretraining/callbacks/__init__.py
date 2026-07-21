@@ -10,6 +10,7 @@ from .knn import OnlineKNN
 from .latent_viz import LatentViz
 from .lidar import LiDAR
 from .probe import OnlineProbe
+from .dino_linear_probe import DinoStyleLinearProbe
 from .pca_visualizer import PCATokenVisualizer
 from .attention_visualizer import AttentionVisualizer
 from .queues import OrderedQueue, UnsortedQueue
@@ -33,6 +34,7 @@ from .hf_models import HuggingFaceCheckpointCallback
 
 __all__ = [
     OnlineProbe,
+    DinoStyleLinearProbe,
     OnlineImageDecoder,
     ReconViz,
     HardwareMonitor,
