@@ -79,6 +79,16 @@ def joint_cw_forward(self, batch, stage):
     self.log(f"{stage}/joint_cw_gg", output.gg_loss, on_step=True, on_epoch=True, sync_dist=True)
     self.log(f"{stage}/joint_cw_gl", output.gl_loss, on_step=True, on_epoch=True, sync_dist=True)
     self.log(f"{stage}/joint_cw_ll", output.ll_loss, on_step=True, on_epoch=True, sync_dist=True)
+    if stage == "fit" and output.diagnostics:
+        self.log_dict(
+            {
+                f"{stage}/diagnostics/{name}": value
+                for name, value in output.diagnostics.items()
+            },
+            on_step=True,
+            on_epoch=True,
+            sync_dist=True,
+        )
     return out
 
 

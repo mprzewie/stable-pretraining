@@ -70,6 +70,16 @@ def lejepa_forward(self, batch, stage):
     out["loss"] = output.loss
     out["embedding"] = output.embedding
     self.log(f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True)
+    if stage == "fit" and output.diagnostics:
+        self.log_dict(
+            {
+                f"{stage}/diagnostics/{name}": value
+                for name, value in output.diagnostics.items()
+            },
+            on_step=True,
+            on_epoch=True,
+            sync_dist=True,
+        )
     return out
 
 
@@ -138,6 +148,9 @@ def main():
         lamb=0.02,
         n_slices=1024,
         n_points=17,
+        diagnostic_rho_gg=float(os.environ.get("RHO_GG", "0.88")),
+        diagnostic_rho_gl=float(os.environ.get("RHO_GL", "0.72")),
+        diagnostic_rho_ll=float(os.environ.get("RHO_LL", "0.61")),
     )
 
     module = spt.Module(

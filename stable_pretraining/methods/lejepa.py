@@ -35,6 +35,7 @@ import math
 import timm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributed.nn import all_reduce
 
 from stable_pretraining import Module
@@ -42,6 +43,114 @@ from stable_pretraining.backbone import MLP
 
 from cw_torch.gamma import silverman_rule_of_thumb
 from cw_torch.metric import cw_normality
+
+
+@torch.no_grad()
+def pair_diagnostics(
+    z1: torch.Tensor, z2: torch.Tensor, rho: float
+) -> dict[str, torch.Tensor]:
+    """Measure how a projected view pair compares with its target correlation.
+
+    Args:
+        z1: First projected view with shape ``[batch, features]``.
+        z2: Second projected view with shape ``[batch, features]``.
+        rho: Target correlation between the two views.
+
+    Returns:
+        Detached scalar diagnostics for the view pair.
+    """
+    if z1.ndim != 2 or z1.shape != z2.shape:
+        raise ValueError("z1 and z2 must be same-shaped two-dimensional tensors.")
+    if not -1.0 < rho < 1.0:
+        raise ValueError(f"rho must be between -1 and 1, got {rho}.")
+
+    eps = 1e-8
+    batch_size = z1.shape[0]
+
+    # Quantiles are not implemented for all reduced-precision device dtypes.
+    z1 = z1.detach().float()
+    z2 = z2.detach().float()
+    z1c = z1 - z1.mean(dim=0, keepdim=True)
+    z2c = z2 - z2.mean(dim=0, keepdim=True)
+
+    var1 = z1c.square().mean(dim=0)
+    var2 = z2c.square().mean(dim=0)
+    cross_diag = (z1c * z2c).mean(dim=0)
+    corr_per_dim = cross_diag / torch.sqrt(var1 * var2).clamp_min(eps)
+
+    mse_per_dim = (z1 - z2).square().mean()
+    target_mse = z1.new_tensor(2.0 * (1.0 - rho))
+
+    z_plus = (z1 + z2) / math.sqrt(2.0 * (1.0 + rho))
+    z_minus = (z1 - z2) / math.sqrt(2.0 * (1.0 - rho))
+    plus_var = (z_plus - z_plus.mean(0)).square().mean()
+    minus_var = (z_minus - z_minus.mean(0)).square().mean()
+
+    n1 = F.normalize(z1, dim=-1)
+    n2 = F.normalize(z2, dim=-1)
+    similarities = n1 @ n2.T
+
+    labels = torch.arange(batch_size, device=z1.device)
+    retrieval_top1 = (similarities.argmax(dim=1) == labels).float().mean()
+
+    positive = similarities.diag()
+    negative = similarities.masked_fill(
+        torch.eye(batch_size, device=z1.device, dtype=torch.bool),
+        float("-inf"),
+    ).max(dim=1).values
+
+    return {
+        "mse_per_dim": mse_per_dim,
+        "target_mse_per_dim": target_mse,
+        "mse_target_ratio": mse_per_dim / target_mse.clamp_min(eps),
+        "rho_mean": corr_per_dim.mean(),
+        "rho_std": corr_per_dim.std(),
+        "rho_p10": corr_per_dim.quantile(0.10),
+        "rho_median": corr_per_dim.median(),
+        "rho_p90": corr_per_dim.quantile(0.90),
+        "plus_var": plus_var,
+        "minus_var": minus_var,
+        "pair_retrieval_top1": retrieval_top1,
+        "positive_similarity": positive.mean(),
+        "positive_hard_negative_margin": (positive - negative).mean(),
+        "feature_var_1": var1.mean(),
+        "feature_var_2": var2.mean(),
+    }
+
+
+@torch.no_grad()
+def _grouped_pair_diagnostics(
+    all_projected: torch.Tensor,
+    n_global: int,
+    rhos: dict[str, float],
+) -> dict[str, torch.Tensor]:
+    """Average diagnostics within global/global, global/local, and local/local."""
+    grouped: dict[str, list[dict[str, torch.Tensor]]] = {
+        "gg": [],
+        "gl": [],
+        "ll": [],
+    }
+    for i in range(len(all_projected)):
+        for j in range(i + 1, len(all_projected)):
+            if i < n_global and j < n_global:
+                group = "gg"
+            elif i < n_global or j < n_global:
+                group = "gl"
+            else:
+                group = "ll"
+            grouped[group].append(
+                pair_diagnostics(all_projected[i], all_projected[j], rhos[group])
+            )
+
+    diagnostics = {}
+    for group, pair_metrics in grouped.items():
+        if not pair_metrics:
+            continue
+        for name in pair_metrics[0]:
+            diagnostics[f"{group}/{name}"] = torch.stack(
+                [metrics[name] for metrics in pair_metrics]
+            ).mean()
+    return diagnostics
 
 
 class EppsPulley(nn.Module):
@@ -175,12 +284,15 @@ class LeJEPAOutput(ModelOutput):
     :ivar embedding: Backbone embeddings [V*N, D] (train) or [N, D] (eval).
     :ivar inv_loss: Invariance component.
     :ivar sigreg_loss: Epps-Pulley goodness-of-fit component.
+    :ivar diagnostics: Detached pair metrics grouped under ``gg/``, ``gl/``,
+        and ``ll/`` keys.
     """
 
     loss: torch.Tensor = None
     embedding: torch.Tensor = None
     inv_loss: torch.Tensor = None
     sigreg_loss: torch.Tensor = None
+    diagnostics: Optional[dict[str, torch.Tensor]] = None
 
 
 class LeJEPA(Module):
@@ -204,6 +316,12 @@ class LeJEPA(Module):
     :param n_points: EP quadrature nodes (default: 17)
     :param lamb: SIGReg weight λ (default: 0.02)
     :param pretrained: Load pretrained timm weights
+    :param diagnostic_rho_gg: Target correlation used only for global/global
+        pair diagnostics.
+    :param diagnostic_rho_gl: Target correlation used only for global/local
+        pair diagnostics.
+    :param diagnostic_rho_ll: Target correlation used only for local/local
+        pair diagnostics.
 
     Example::
 
@@ -254,6 +372,9 @@ class LeJEPA(Module):
         drop_path_rate: float = 0.1,
         sigreg: str = "ep",
         override_sr_gamma: float | str | None = None,
+        diagnostic_rho_gg: float = 0.88,
+        diagnostic_rho_gl: float = 0.72,
+        diagnostic_rho_ll: float = 0.61,
     ):
         super().__init__()
 
@@ -320,6 +441,11 @@ class LeJEPA(Module):
 
         self.lamb = lamb
         self.embed_dim = embed_dim
+        self.diagnostic_rhos = {
+            "gg": diagnostic_rho_gg,
+            "gl": diagnostic_rho_gl,
+            "ll": diagnostic_rho_ll,
+        }
 
     @staticmethod
     def _compute_loss(
@@ -368,6 +494,11 @@ class LeJEPA(Module):
             loss, inv_loss, sigreg_loss = self._compute_loss(
                 all_projected, len(global_views), self.sigreg, self.lamb
             )
+            diagnostics = _grouped_pair_diagnostics(
+                all_projected,
+                len(global_views),
+                self.diagnostic_rhos,
+            )
 
             embedding = g_features.detach()
             return LeJEPAOutput(
@@ -375,6 +506,7 @@ class LeJEPA(Module):
                 embedding=embedding,
                 inv_loss=inv_loss,
                 sigreg_loss=sigreg_loss,
+                diagnostics=diagnostics,
             )
         else:
             assert images is not None, "images must be provided in eval mode"

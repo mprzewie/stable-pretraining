@@ -11,7 +11,7 @@ from torch.distributed.nn import all_reduce
 
 from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
-from stable_pretraining.methods.lejepa import CWReg
+from stable_pretraining.methods.lejepa import CWReg, _grouped_pair_diagnostics
 
 from cw_torch.gamma import silverman_rule_of_thumb
 from cw_torch.metric import cw_normality
@@ -38,11 +38,14 @@ class JointCWLoss(Module):
     
 @dataclass
 class JointCWOutput(ModelOutput):
+    """Joint-CW losses, embeddings, and detached pair diagnostics."""
+
     loss: torch.Tensor = None
     embedding: torch.Tensor = None
     gg_loss: torch.Tensor = None
     gl_loss: torch.Tensor = None
     ll_loss: torch.Tensor = None
+    diagnostics: Optional[dict[str, torch.Tensor]] = None
 
 class JointCW(Module):
     def __init__(
@@ -112,6 +115,11 @@ class JointCW(Module):
         self.jcw_gg = JointCWLoss(gamma=sr_gamma, rho=rho_gg)
         self.jcw_gl = JointCWLoss(gamma=sr_gamma, rho=rho_gl)
         self.jcw_ll = JointCWLoss(gamma=sr_gamma, rho=rho_ll)
+        self.diagnostic_rhos = {
+            "gg": rho_gg,
+            "gl": rho_gl,
+            "ll": rho_ll,
+        }
 
         # self.lamb = lamb
         self.embed_dim = embed_dim
@@ -170,6 +178,11 @@ class JointCW(Module):
                 all_projected, len(global_views)
             )
             loss = (gg_loss + gl_loss + ll_loss) / 3
+            diagnostics = _grouped_pair_diagnostics(
+                all_projected,
+                len(global_views),
+                self.diagnostic_rhos,
+            )
 
             embedding = g_features.detach()
             return JointCWOutput(
@@ -178,6 +191,7 @@ class JointCW(Module):
                 gl_loss=gl_loss,
                 ll_loss=ll_loss,
                 embedding=embedding,
+                diagnostics=diagnostics,
             )
         else:
             assert images is not None, "images must be provided in eval mode"
@@ -190,4 +204,3 @@ class JointCW(Module):
                 ll_loss=zero,
                 embedding=embedding,
             )   
-

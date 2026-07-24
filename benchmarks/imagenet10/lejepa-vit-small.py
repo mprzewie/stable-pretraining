@@ -122,6 +122,16 @@ def lejepa_forward(self, batch, stage):
         f"{stage}/inv", output.inv_loss, on_step=True, on_epoch=True, sync_dist=True
     )
     self.log(f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True)
+    if stage == "fit" and output.diagnostics:
+        self.log_dict(
+            {
+                f"{stage}/diagnostics/{name}": value
+                for name, value in output.diagnostics.items()
+            },
+            on_step=True,
+            on_epoch=True,
+            sync_dist=True,
+        )
     return out
 
 
