@@ -1,7 +1,7 @@
-"""LeJEPA ViT-S/16 on ImageNet-10 (Imagenette). 20 epochs, 1 GPU, no W&B.
+"""Joint-CW ViT-S/16 on ImageNet-10 (Imagenette), matched to LeJEPA quick.
 
-Short verification recipe — the long-form ``lejepa-vit-small.py`` runs 600
-epochs with checkpointing.
+This 20-epoch recipe differs from ``lejepa-vit-small-quick.py`` only in the
+training objective and its method-specific gamma/rho parameters.
 """
 
 import os
@@ -15,7 +15,7 @@ import torchmetrics
 
 import stable_pretraining as spt
 from stable_pretraining.data import transforms
-from stable_pretraining.methods.lejepa import LeJEPA, LeJEPAOutput
+from stable_pretraining.methods.joint_cw import JointCW, JointCWOutput
 
 
 def _photometric_transforms():
@@ -48,28 +48,37 @@ def _local_transform():
     )
 
 
-def lejepa_forward(self, batch, stage):
+def joint_cw_forward(self, batch, stage):
     out = {}
     images = batch.get("image")
     if stage == "fit":
-        global_views = [batch[k]["image"] for k in batch if k.startswith("global")]
-        local_views = [batch[k]["image"] for k in batch if k.startswith("local")]
+        global_views = [
+            batch[key]["image"] for key in batch if key.startswith("global")
+        ]
+        local_views = [
+            batch[key]["image"] for key in batch if key.startswith("local")
+        ]
         labels = next(
-            batch[k]["label"]
-            for k in batch
-            if k.startswith("global") or k.startswith("local")
+            batch[key]["label"]
+            for key in batch
+            if key.startswith("global") or key.startswith("local")
         )
-        output: LeJEPAOutput = self.model.forward(
-            global_views=global_views, local_views=local_views, images=images
+        output: JointCWOutput = self.model.forward(
+            global_views=global_views,
+            local_views=local_views,
+            images=images,
         )
         out["label"] = labels.repeat(len(global_views))
     else:
-        output: LeJEPAOutput = self.model.forward(images=images)
+        output: JointCWOutput = self.model.forward(images=images)
         out["label"] = batch["label"].long()
 
     out["loss"] = output.loss
     out["embedding"] = output.embedding
     self.log(f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True)
+    self.log(f"{stage}/joint_cw_gg", output.gg_loss, on_step=True, on_epoch=True, sync_dist=True)
+    self.log(f"{stage}/joint_cw_gl", output.gl_loss, on_step=True, on_epoch=True, sync_dist=True)
+    self.log(f"{stage}/joint_cw_ll", output.ll_loss, on_step=True, on_epoch=True, sync_dist=True)
     return out
 
 
@@ -81,22 +90,20 @@ def main():
     pl.seed_everything(seed, workers=True)
     num_gpus = torch.cuda.device_count() or 1
     batch_size = 128
-    max_epochs = int(os.environ.get("MAX_EPOCHS", 20))
+    max_epochs = int(os.environ.get("MAX_EPOCHS", "20"))
     global_views = 2
     all_views = 8
 
     data_dir = str(get_data_dir("imagenet10"))
-
     train_transform = transforms.MultiViewTransform(
         {
-            **{f"global_{i}": _global_transform() for i in range(global_views)},
+            **{f"global_{index}": _global_transform() for index in range(global_views)},
             **{
-                f"local_{i}": _local_transform()
-                for i in range(all_views - global_views)
+                f"local_{index}": _local_transform()
+                for index in range(all_views - global_views)
             },
         }
     )
-
     val_transform = transforms.Compose(
         transforms.RGB(),
         transforms.Resize((256, 256)),
@@ -133,16 +140,16 @@ def main():
         ),
     )
 
-    model = LeJEPA(
+    model = JointCW(
         encoder_name="vit_small_patch16_224",
-        lamb=0.02,
-        n_slices=1024,
-        n_points=17,
+        override_sr_gamma=float(os.environ.get("JCW_GAMMA", "0.5")),
+        rho_gg=float(os.environ.get("RHO_GG", "0.88")),
+        rho_gl=float(os.environ.get("RHO_GL", "0.72")),
+        rho_ll=float(os.environ.get("RHO_LL", "0.61")),
     )
-
     module = spt.Module(
         model=model,
-        forward=lejepa_forward,
+        forward=joint_cw_forward,
         optim={
             "optimizer": {
                 "type": "AdamW",
@@ -174,7 +181,9 @@ def main():
                 loss=nn.CrossEntropyLoss(),
                 metrics={
                     "top1": torchmetrics.classification.MulticlassAccuracy(10),
-                    "top5": torchmetrics.classification.MulticlassAccuracy(10, top_k=5),
+                    "top5": torchmetrics.classification.MulticlassAccuracy(
+                        10, top_k=5
+                    ),
                 },
                 optimizer={"type": "AdamW", "lr": 0.03, "weight_decay": 1e-6},
             ),
@@ -183,7 +192,9 @@ def main():
                 input="embedding",
                 target="label",
                 queue_length=10000,
-                metrics={"top1": torchmetrics.classification.MulticlassAccuracy(10)},
+                metrics={
+                    "top1": torchmetrics.classification.MulticlassAccuracy(10)
+                },
                 input_dim=model.embed_dim,
                 k=20,
             ),
@@ -192,7 +203,7 @@ def main():
         logger=pl.pytorch.loggers.CSVLogger(
             save_dir=str(Path(__file__).parent / "logs"),
             name=os.environ.get(
-                "RUN_NAME", f"lejepa-vits-inet10-quick-seed{seed}"
+                "RUN_NAME", f"joint-cw-vits-inet10-quick-seed{seed}"
             ),
         ),
         precision="16-mixed",
