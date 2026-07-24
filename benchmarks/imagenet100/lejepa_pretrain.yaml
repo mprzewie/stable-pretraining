@@ -155,7 +155,9 @@ local_transform:
   _args_:
     - _target_: stable_pretraining.data.transforms.RGB
     - _target_: stable_pretraining.data.transforms.RandomResizedCrop
-      size: [96, 96]
+      size:
+        - ${eval:${oc.env:LOCAL_CROP_SIZE,96}}
+        - ${eval:${oc.env:LOCAL_CROP_SIZE,96}}
       scale: [0.05, 0.3]
     - _target_: stable_pretraining.data.transforms.RandomHorizontalFlip
       p: 0.5
@@ -242,7 +244,7 @@ local_gpu_transform:
   compile: ${eval:${oc.env:GPU_AUG_COMPILE,0}}
   transforms:
     - _target_: stable_pretraining.data.gpu_transforms.GPURandomResizedCrop
-      size: 96
+      size: ${eval:${oc.env:LOCAL_CROP_SIZE,96}}
       scale: [0.05, 0.3]
     - _target_: stable_pretraining.data.gpu_transforms.GPURandomHorizontalFlip
       p: 0.5

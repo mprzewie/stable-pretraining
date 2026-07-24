@@ -5,6 +5,7 @@ Uses 2 global views (224x224) + 6 local views (96x96) matching
 the official LeJEPA augmentation strategy.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -13,9 +14,16 @@ import torch
 import torch.nn as nn
 import torchmetrics
 
-import stable_pretraining as spt
-from stable_pretraining.data import transforms
-from stable_pretraining.methods.lejepa import LeJEPA, LeJEPAOutput
+# Multi-worker DataLoaders pass sample tensors between processes via file
+# descriptors by default; with the multi-view (8 crops/sample) pipeline and
+# many workers this overflows the open-fd limit on some nodes, raising
+# "RuntimeError: received 0 items of ancdata". The file_system strategy passes
+# shared-memory files by name instead, avoiding the fd limit.
+torch.multiprocessing.set_sharing_strategy("file_system")
+
+import stable_pretraining as spt  # noqa: E402
+from stable_pretraining.data import transforms  # noqa: E402
+from stable_pretraining.methods.lejepa import LeJEPA, LeJEPAOutput  # noqa: E402
 
 
 def _photometric_transforms() -> list:
@@ -46,6 +54,15 @@ def _local_transform():
         *_photometric_transforms(),
         transforms.ToImage(**spt.data.static.ImageNet),
     )
+
+
+def _optional_float_or_str_env(name: str):
+    value = os.environ.get(name)
+    if value in (None, "", "none", "null", "None"):
+        return None
+    if value == "silverman":
+        return value
+    return float(value)
 
 
 def lejepa_forward(self, batch, stage):
@@ -115,7 +132,7 @@ def main():
     num_gpus = 1
     batch_size = 128
     num_workers = 16
-    max_epochs = 600
+    max_epochs = int(os.environ.get("MAX_EPOCHS", 200))
     global_views = 2
     all_views = 8
 
@@ -170,9 +187,11 @@ def main():
 
     model = LeJEPA(
         encoder_name="vit_small_patch16_224",
-        lamb=0.02,
-        n_slices=1024,
-        n_points=17,
+        lamb=float(os.environ.get("LAMB", "0.02")),
+        n_slices=int(os.environ.get("N_SLICES", "1024")),
+        n_points=int(os.environ.get("N_POINTS", "17")),
+        sigreg=os.environ.get("SIGREG", "ep"),
+        override_sr_gamma=_optional_float_or_str_env("OVERRIDE_SR_GAMMA"),
     )
 
     module = spt.Module(
@@ -181,7 +200,7 @@ def main():
         optim={
             "optimizer": {
                 "type": "AdamW",
-                "lr": (lr := 4e-4),
+                "lr": (lr := float(os.environ.get("LR", "4e-4"))),
                 "weight_decay": 0.05,
                 "betas": (0.9, 0.999),
             },
@@ -238,9 +257,10 @@ def main():
             pl.pytorch.callbacks.LearningRateMonitor(logging_interval="step"),
         ],
         logger=pl.pytorch.loggers.WandbLogger(
-            entity="stable-ssl",
-            project="imagenet10-methods",
-            name="lejepa-vits-inet10",
+            entity=os.environ.get("WANDB_ENTITY", "stable-ssl"),
+            project=os.environ.get("WANDB_PROJECT", "imagenet10-methods"),
+            group=os.environ.get("WANDB_GROUP") or None,
+            name=os.environ.get("WANDB_NAME", "lejepa-vits-inet10"),
             log_model=False,
         ),
         precision="16-mixed",

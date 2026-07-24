@@ -10,6 +10,7 @@ Epoch count is read from the ``MAX_EPOCHS`` env var (default 200, matching the
 README benchmark table).
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -121,7 +122,7 @@ def main():
     num_gpus = 1
     batch_size = 128
     num_workers = 16
-    max_epochs = int(__import__("os").environ.get("MAX_EPOCHS", 200))
+    max_epochs = int(os.environ.get("MAX_EPOCHS", 200))
     global_views = 2
     all_views = 8
 
@@ -176,8 +177,8 @@ def main():
 
     model = VISReg(
         encoder_name="vit_small_patch16_224",
-        lamb=0.6,
-        num_projections=1024,
+        lamb=float(os.environ.get("LAMB", "0.6")),
+        num_projections=int(os.environ.get("NUM_PROJECTIONS", "1024")),
     )
 
     module = spt.Module(
@@ -186,7 +187,7 @@ def main():
         optim={
             "optimizer": {
                 "type": "AdamW",
-                "lr": (lr := 1e-3),
+                "lr": (lr := float(os.environ.get("LR", "1e-3"))),
                 "weight_decay": 0.05,
                 "betas": (0.9, 0.999),
             },
@@ -229,9 +230,19 @@ def main():
             ),
             pl.pytorch.callbacks.LearningRateMonitor(logging_interval="step"),
         ],
-        logger=pl.pytorch.loggers.CSVLogger(
-            save_dir=str(Path(__file__).parent / "logs"),
-            name="visreg-vits-inet10",
+        logger=(
+            pl.pytorch.loggers.WandbLogger(
+                entity=os.environ.get("WANDB_ENTITY", "stable-ssl"),
+                project=os.environ.get("WANDB_PROJECT", "imagenet10-methods"),
+                group=os.environ.get("WANDB_GROUP") or None,
+                name=os.environ.get("WANDB_NAME", "visreg-vits-inet10"),
+                log_model=False,
+            )
+            if os.environ.get("LOGGER", "csv") == "wandb"
+            else pl.pytorch.loggers.CSVLogger(
+                save_dir=str(Path(__file__).parent / "logs"),
+                name=os.environ.get("WANDB_NAME", "visreg-vits-inet10"),
+            )
         ),
         precision="16-mixed",
         devices=num_gpus,
