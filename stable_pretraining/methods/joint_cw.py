@@ -68,6 +68,7 @@ class JointCW(Module):
         rho_gg = 0.88,
         rho_gl = 0.72,
         rho_ll = 0.61,
+        beta: float = 1.0,
     ):
         super().__init__()
 
@@ -117,9 +118,10 @@ class JointCW(Module):
                 raise ValueError("override_sr_gamma must be positive.")
         
 
-        self.jcw_gg = JointCWLoss(gamma=sr_gamma, rho=rho_gg)
-        self.jcw_gl = JointCWLoss(gamma=sr_gamma, rho=rho_gl)
-        self.jcw_ll = JointCWLoss(gamma=sr_gamma, rho=rho_ll)
+        self.jcw_gg = JointCWLoss(gamma=sr_gamma, rho=rho_gg, beta=beta)
+        self.jcw_gl = JointCWLoss(gamma=sr_gamma, rho=rho_gl, beta=beta)
+        self.jcw_ll = JointCWLoss(gamma=sr_gamma, rho=rho_ll, beta=beta)
+        self.beta = beta
         self.diagnostic_rhos = {
             "gg": rho_gg,
             "gl": rho_gl,

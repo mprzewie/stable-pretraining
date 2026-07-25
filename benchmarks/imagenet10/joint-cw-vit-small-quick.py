@@ -156,6 +156,7 @@ def main():
         rho_gg=float(os.environ.get("RHO_GG", "0.88")),
         rho_gl=float(os.environ.get("RHO_GL", "0.72")),
         rho_ll=float(os.environ.get("RHO_LL", "0.61")),
+        beta=float(os.environ.get("BETA", "1.0")),
     )
     module = spt.Module(
         model=model,
