@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from transformers.utils import ModelOutput
 from typing import Optional
@@ -21,12 +22,14 @@ from cw_torch.metric import cw_normality
 
 class JointCWLoss(Module):
 
-    def __init__(self, gamma: float = 0.5, rho: float = 0.7, beta: float = 1.0):
+    def __init__(self, gamma: float = 0.5, rho: float = 0.7, beta: float = 0.5):
         super().__init__()
         self.cwreg = CWReg(gamma=gamma)
         assert -1 < rho < 1, f"rho must be between -1 and 1 but got {rho=}"
+        assert 0 <= beta <= 1, f"beta must be between 0 and 1 but got {beta=}"
         self.rho = rho
         self.beta = beta
+
     def forward(self, z1: torch.Tensor, z2: torch.Tensor):
         assert len(z1.shape) == len(z2.shape) == 2, "Input tensors must have 2 dimensions."
         assert z1.shape == z2.shape, "Input tensors must have the same shape."
@@ -39,7 +42,22 @@ class JointCWLoss(Module):
         cw_plus = self.cwreg(z_plus)
         cw_minus = self.cwreg(z_minus)
 
-        return ((1 - self.beta) * cw_joint) + (self.beta * (cw_plus + cw_minus) / 2)
+        cw_blocks = 0.5 * (cw_plus + cw_minus)
+        weighted_joint = (1.0 - self.beta) * cw_joint
+        weighted_blocks = self.beta * cw_blocks
+
+        loss = weighted_joint + weighted_blocks
+
+        diag = dict(
+            cw_joint=cw_joint.detach(),
+            cw_plus=cw_plus.detach(),
+            cw_minus=cw_minus.detach(),
+            cw_blocks=cw_blocks.detach(),
+            weighted_joint=weighted_joint.detach(),
+            weighted_blocks=weighted_blocks.detach(),
+        )
+
+        return loss, diag
     
 @dataclass
 class JointCWOutput(ModelOutput):
@@ -147,17 +165,28 @@ class JointCW(Module):
         gg_losses = []
         gl_losses = []
         ll_losses = []
+        diagnostics = defaultdict(list)
 
         for i in range(len(all_projected)):
             for j in range(i + 1, len(all_projected)):
                 if i < n_global and j < n_global:
-                    gg_losses.append(self.jcw_gg(all_projected[i], all_projected[j]))
+                    l, d = self.jcw_gg(all_projected[i], all_projected[j])
+                    gg_losses.append(l)
+                    for key, value in d.items():
+                        diagnostics[f"gg/{key}"].append(value)
                 elif i < n_global or j < n_global:
-                    gl_losses.append(self.jcw_gl(all_projected[i], all_projected[j]))
+                    l, d = self.jcw_gl(all_projected[i], all_projected[j])
+                    gl_losses.append(l)
+                    for key, value in d.items():
+                        diagnostics[f"gl/{key}"].append(value)
                 else:
-                    ll_losses.append(self.jcw_ll(all_projected[i], all_projected[j]))
-                    
-        return torch.stack(gg_losses).mean(), torch.stack(gl_losses).mean(), torch.stack(ll_losses).mean()
+                    l, d = self.jcw_ll(all_projected[i], all_projected[j])
+                    ll_losses.append(l)
+                    for key, value in d.items():
+                        diagnostics[f"ll/{key}"].append(value)
+
+        diagnostics = {f"{key}": torch.stack(values).mean() for key, values in diagnostics.items()}
+        return torch.stack(gg_losses).mean(), torch.stack(gl_losses).mean(), torch.stack(ll_losses).mean(), diagnostics
 
 
     def forward(
@@ -181,7 +210,7 @@ class JointCW(Module):
             n_views = len(global_views) + len(local_views)
             all_projected = all_projected.view(n_views, bs, -1)
 
-            gg_loss, gl_loss, ll_loss = self._compute_loss(
+            gg_loss, gl_loss, ll_loss, loss_diagnostics = self._compute_loss(
                 all_projected, len(global_views)
             )
             loss = (gg_loss + gl_loss + ll_loss) / 3
@@ -190,6 +219,7 @@ class JointCW(Module):
                 len(global_views),
                 self.diagnostic_rhos,
             )
+            diagnostics.update(loss_diagnostics)
 
             embedding = g_features.detach()
             return JointCWOutput(
