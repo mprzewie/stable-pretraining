@@ -21,12 +21,12 @@ from cw_torch.metric import cw_normality
 
 class JointCWLoss(Module):
 
-    def __init__(self, gamma: float = 0.5, rho: float = 0.7):
+    def __init__(self, gamma: float = 0.5, rho: float = 0.7, beta: float = 1.0):
         super().__init__()
         self.cwreg = CWReg(gamma=gamma)
         assert -1 < rho < 1, f"rho must be between -1 and 1 but got {rho=}"
         self.rho = rho
-
+        self.beta = beta
     def forward(self, z1: torch.Tensor, z2: torch.Tensor):
         assert len(z1.shape) == len(z2.shape) == 2, "Input tensors must have 2 dimensions."
         assert z1.shape == z2.shape, "Input tensors must have the same shape."
@@ -34,7 +34,12 @@ class JointCWLoss(Module):
         z_plus  = (z1 + z2) / math.sqrt(2 * (1 + self.rho))
         z_minus = (z1 - z2) / math.sqrt(2 * (1 - self.rho))
         joint = torch.cat([z_plus, z_minus], dim=-1)
-        return self.cwreg(joint)
+        cw_joint = self.cwreg(joint)
+
+        cw_plus = self.cwreg(z_plus)
+        cw_minus = self.cwreg(z_minus)
+
+        return ((1 - self.beta) * cw_joint) + (self.beta * (cw_plus + cw_minus) / 2)
     
 @dataclass
 class JointCWOutput(ModelOutput):

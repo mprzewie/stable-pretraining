@@ -110,6 +110,7 @@ def pair_diagnostics(
         "rho_p90": corr_per_dim.quantile(0.90),
         "plus_var": plus_var,
         "minus_var": minus_var,
+        "r_plus_minus": plus_var / minus_var.clamp_min(eps),
         "pair_retrieval_top1": retrieval_top1,
         "positive_similarity": positive.mean(),
         "positive_hard_negative_margin": (positive - negative).mean(),
