@@ -22,13 +22,22 @@ from cw_torch.metric import cw_normality
 
 class JointCWLoss(Module):
 
-    def __init__(self, gamma: float = 0.5, rho: float = 0.7, beta: float = 0.5):
+    def __init__(
+        self,
+        gamma: float = 0.5,
+        rho: float = 0.7,
+        beta: float = 0.5,
+        w_plus: Optional[float] = None,
+    ):
         super().__init__()
         self.cwreg = CWReg(gamma=gamma)
         assert -1 < rho < 1, f"rho must be between -1 and 1 but got {rho=}"
         assert 0 <= beta <= 1, f"beta must be between 0 and 1 but got {beta=}"
+        w_plus = w_plus if w_plus is not None else beta / 2
+        assert 0 <= w_plus <= beta, f"w_plus must be between 0 and {beta=} but got {w_plus=}"
         self.rho = rho
         self.beta = beta
+        self.w_plus = w_plus
 
     def forward(self, z1: torch.Tensor, z2: torch.Tensor):
         assert len(z1.shape) == len(z2.shape) == 2, "Input tensors must have 2 dimensions."
@@ -42,9 +51,9 @@ class JointCWLoss(Module):
         cw_plus = self.cwreg(z_plus)
         cw_minus = self.cwreg(z_minus)
 
-        cw_blocks = 0.5 * (cw_plus + cw_minus)
+        cw_blocks = self.w_plus * cw_plus + (self.beta - self.w_plus) * cw_minus
         weighted_joint = (1.0 - self.beta) * cw_joint
-        weighted_blocks = self.beta * cw_blocks
+        weighted_blocks = cw_blocks
 
         loss = weighted_joint + weighted_blocks
 
@@ -87,6 +96,7 @@ class JointCW(Module):
         rho_gl = 0.72,
         rho_ll = 0.61,
         beta: float = 1.0,
+        w_plus: Optional[float] = None,
     ):
         super().__init__()
 
@@ -136,10 +146,17 @@ class JointCW(Module):
                 raise ValueError("override_sr_gamma must be positive.")
         
 
-        self.jcw_gg = JointCWLoss(gamma=sr_gamma, rho=rho_gg, beta=beta)
-        self.jcw_gl = JointCWLoss(gamma=sr_gamma, rho=rho_gl, beta=beta)
-        self.jcw_ll = JointCWLoss(gamma=sr_gamma, rho=rho_ll, beta=beta)
+        self.jcw_gg = JointCWLoss(
+            gamma=sr_gamma, rho=rho_gg, beta=beta, w_plus=w_plus
+        )
+        self.jcw_gl = JointCWLoss(
+            gamma=sr_gamma, rho=rho_gl, beta=beta, w_plus=w_plus
+        )
+        self.jcw_ll = JointCWLoss(
+            gamma=sr_gamma, rho=rho_ll, beta=beta, w_plus=w_plus
+        )
         self.beta = beta
+        self.w_plus = self.jcw_gg.w_plus
         self.diagnostic_rhos = {
             "gg": rho_gg,
             "gl": rho_gl,
