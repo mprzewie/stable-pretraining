@@ -14,7 +14,7 @@ trainer:
   default_root_dir: ${oc.env:OUTPUT_DIR,benchmarks/imagenet10/runs/lejepa}
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      filename: lejepa-{epoch:03d}
+      filename: ${oc.env:METHOD,lejepa}-{epoch:03d}
       every_n_epochs: ${eval:${oc.env:SAVE_EVERY_N_EPOCHS,20}}
       save_top_k: -1
       save_last: true

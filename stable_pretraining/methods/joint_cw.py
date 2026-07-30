@@ -1,49 +1,53 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from transformers.utils import ModelOutput
-from typing import Optional
-from numbers import Real
 import math
+from numbers import Real
+from typing import Optional
 
 import timm
 import torch
 import torch.nn as nn
-from torch.distributed.nn import all_reduce
+from transformers.utils import ModelOutput
 
 from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
 from stable_pretraining.methods.lejepa import CWReg, _grouped_pair_diagnostics
 
-from cw_torch.gamma import silverman_rule_of_thumb
-from cw_torch.metric import cw_normality
-
-
-
 
 class JointCWLoss(Module):
+    """Pairwise Joint-CW objective in whitened sum and difference coordinates."""
 
     def __init__(
         self,
-        gamma: float = 0.5,
+        gamma: float | None = 0.5,
         rho: float = 0.7,
         beta: float = 0.5,
         w_plus: Optional[float] = None,
     ):
         super().__init__()
         self.cwreg = CWReg(gamma=gamma)
-        assert -1 < rho < 1, f"rho must be between -1 and 1 but got {rho=}"
-        assert 0 <= beta <= 1, f"beta must be between 0 and 1 but got {beta=}"
+        if not -1 < rho < 1:
+            raise ValueError(f"rho must be between -1 and 1 but got {rho=}")
+        if not 0 <= beta <= 1:
+            raise ValueError(f"beta must be between 0 and 1 but got {beta=}")
         w_plus = w_plus if w_plus is not None else beta / 2
-        assert 0 <= w_plus <= beta, f"w_plus must be between 0 and {beta=} but got {w_plus=}"
+        if not 0 <= w_plus <= beta:
+            raise ValueError(f"w_plus must be between 0 and {beta=} but got {w_plus=}")
         self.rho = rho
         self.beta = beta
         self.w_plus = w_plus
 
-    def forward(self, z1: torch.Tensor, z2: torch.Tensor):
-        assert len(z1.shape) == len(z2.shape) == 2, "Input tensors must have 2 dimensions."
-        assert z1.shape == z2.shape, "Input tensors must have the same shape."
-        
-        z_plus  = (z1 + z2) / math.sqrt(2 * (1 + self.rho))
+    def forward(
+        self,
+        z1: torch.Tensor,
+        z2: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if z1.ndim != 2 or z2.ndim != 2:
+            raise ValueError("Input tensors must have two dimensions.")
+        if z1.shape != z2.shape:
+            raise ValueError("Input tensors must have the same shape.")
+
+        z_plus = (z1 + z2) / math.sqrt(2 * (1 + self.rho))
         z_minus = (z1 - z2) / math.sqrt(2 * (1 - self.rho))
         joint = torch.cat([z_plus, z_minus], dim=-1)
         cw_joint = self.cwreg(joint)
@@ -54,20 +58,19 @@ class JointCWLoss(Module):
         cw_blocks = self.w_plus * cw_plus + (self.beta - self.w_plus) * cw_minus
         weighted_joint = (1.0 - self.beta) * cw_joint
         weighted_blocks = cw_blocks
-
         loss = weighted_joint + weighted_blocks
 
-        diag = dict(
-            cw_joint=cw_joint.detach(),
-            cw_plus=cw_plus.detach(),
-            cw_minus=cw_minus.detach(),
-            cw_blocks=cw_blocks.detach(),
-            weighted_joint=weighted_joint.detach(),
-            weighted_blocks=weighted_blocks.detach(),
-        )
+        diagnostics = {
+            "cw_joint": cw_joint.detach(),
+            "cw_plus": cw_plus.detach(),
+            "cw_minus": cw_minus.detach(),
+            "cw_blocks": cw_blocks.detach(),
+            "weighted_joint": weighted_joint.detach(),
+            "weighted_blocks": weighted_blocks.detach(),
+        }
+        return loss, diagnostics
 
-        return loss, diag
-    
+
 @dataclass
 class JointCWOutput(ModelOutput):
     """Joint-CW losses, embeddings, and detached pair diagnostics."""
@@ -79,22 +82,20 @@ class JointCWOutput(ModelOutput):
     ll_loss: torch.Tensor = None
     diagnostics: Optional[dict[str, torch.Tensor]] = None
 
+
 class JointCW(Module):
+    """Train an encoder with averaged pairwise GG, GL, and LL Joint-CW."""
+
     def __init__(
         self,
         encoder_name: str = "vit_base_patch16_224",
         projector: Optional[nn.Module] = None,
-        # n_slices: int = 1024,
-        # t_max: float = 3.0,
-        # n_points: int = 17,
-        # lamb: float = 0.02,
         pretrained: bool = False,
         drop_path_rate: float = 0.1,
-        # sigreg: str = "ep",
         override_sr_gamma: float | str | None = None,
-        rho_gg = 0.88,
-        rho_gl = 0.72,
-        rho_ll = 0.61,
+        rho_gg: float = 0.88,
+        rho_gl: float = 0.72,
+        rho_ll: float = 0.61,
         beta: float = 1.0,
         w_plus: Optional[float] = None,
     ):
@@ -128,32 +129,38 @@ class JointCW(Module):
                     dropout=0.0,
                 ),
             )
-
         self.projector = projector
 
         if override_sr_gamma is None:
-            # Method-specific defaults:
-            # original EP uses gamma=0.5
-            # CW uses Silverman
-            sr_gamma = 0.5
-        
+            sr_gamma: float | None = 0.5
         elif override_sr_gamma == "silverman":
             sr_gamma = None
-        
         elif isinstance(override_sr_gamma, Real):
             sr_gamma = float(override_sr_gamma)
             if sr_gamma <= 0:
                 raise ValueError("override_sr_gamma must be positive.")
-        
+        else:
+            raise ValueError(
+                "override_sr_gamma must be None, 'silverman', or a positive number."
+            )
 
         self.jcw_gg = JointCWLoss(
-            gamma=sr_gamma, rho=rho_gg, beta=beta, w_plus=w_plus
+            gamma=sr_gamma,
+            rho=rho_gg,
+            beta=beta,
+            w_plus=w_plus,
         )
         self.jcw_gl = JointCWLoss(
-            gamma=sr_gamma, rho=rho_gl, beta=beta, w_plus=w_plus
+            gamma=sr_gamma,
+            rho=rho_gl,
+            beta=beta,
+            w_plus=w_plus,
         )
         self.jcw_ll = JointCWLoss(
-            gamma=sr_gamma, rho=rho_ll, beta=beta, w_plus=w_plus
+            gamma=sr_gamma,
+            rho=rho_ll,
+            beta=beta,
+            w_plus=w_plus,
         )
         self.beta = beta
         self.w_plus = self.jcw_gg.w_plus
@@ -162,49 +169,56 @@ class JointCW(Module):
             "gl": rho_gl,
             "ll": rho_ll,
         }
-
-        # self.lamb = lamb
         self.embed_dim = embed_dim
 
     def _compute_loss(
         self,
         all_projected: torch.Tensor,
         n_global: int,
-    ):
-        """Compute the LeJEPA loss.
-
-        :param all_projected: All view projections [V, N, K].
-        :param n_global: Number of global views.
-        :param sigreg: SlicedEppsPulley module.
-        :param lamb: SIGReg weight λ.
-        :return: Tuple of (total_loss, inv_loss, sigreg_loss).
-        """
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        dict[str, torch.Tensor],
+    ]:
+        """Average pairwise losses within the GG, GL, and LL groups."""
         gg_losses = []
         gl_losses = []
         ll_losses = []
-        diagnostics = defaultdict(list)
+        diagnostics: dict[str, list[torch.Tensor]] = defaultdict(list)
 
         for i in range(len(all_projected)):
             for j in range(i + 1, len(all_projected)):
                 if i < n_global and j < n_global:
-                    l, d = self.jcw_gg(all_projected[i], all_projected[j])
-                    gg_losses.append(l)
-                    for key, value in d.items():
-                        diagnostics[f"gg/{key}"].append(value)
+                    group = "gg"
+                    objective = self.jcw_gg
+                    losses = gg_losses
                 elif i < n_global or j < n_global:
-                    l, d = self.jcw_gl(all_projected[i], all_projected[j])
-                    gl_losses.append(l)
-                    for key, value in d.items():
-                        diagnostics[f"gl/{key}"].append(value)
+                    group = "gl"
+                    objective = self.jcw_gl
+                    losses = gl_losses
                 else:
-                    l, d = self.jcw_ll(all_projected[i], all_projected[j])
-                    ll_losses.append(l)
-                    for key, value in d.items():
-                        diagnostics[f"ll/{key}"].append(value)
+                    group = "ll"
+                    objective = self.jcw_ll
+                    losses = ll_losses
 
-        diagnostics = {f"{key}": torch.stack(values).mean() for key, values in diagnostics.items()}
-        return torch.stack(gg_losses).mean(), torch.stack(gl_losses).mean(), torch.stack(ll_losses).mean(), diagnostics
+                pair_loss, pair_diagnostics = objective(
+                    all_projected[i],
+                    all_projected[j],
+                )
+                losses.append(pair_loss)
+                for name, value in pair_diagnostics.items():
+                    diagnostics[f"{group}/{name}"].append(value)
 
+        grouped_diagnostics = {
+            name: torch.stack(values).mean() for name, values in diagnostics.items()
+        }
+        return (
+            torch.stack(gg_losses).mean(),
+            torch.stack(gl_losses).mean(),
+            torch.stack(ll_losses).mean(),
+            grouped_diagnostics,
+        )
 
     def forward(
         self,
@@ -213,22 +227,23 @@ class JointCW(Module):
         images: Optional[torch.Tensor] = None,
     ) -> JointCWOutput:
         if self.training:
-            assert global_views is not None and local_views is not None, (
-                "global_views and local_views must be provided in training mode"
-            )
+            if global_views is None or local_views is None:
+                raise ValueError(
+                    "global_views and local_views must be provided in training mode"
+                )
 
             g_features = self.backbone(torch.cat(global_views))
             l_features = self.backbone(torch.cat(local_views))
-
             all_features = torch.cat([g_features, l_features])
             all_projected = self.projector(all_features)
 
-            bs = global_views[0].shape[0]
-            n_views = len(global_views) + len(local_views)
-            all_projected = all_projected.view(n_views, bs, -1)
+            batch_size = global_views[0].shape[0]
+            view_count = len(global_views) + len(local_views)
+            all_projected = all_projected.reshape(view_count, batch_size, -1)
 
             gg_loss, gl_loss, ll_loss, loss_diagnostics = self._compute_loss(
-                all_projected, len(global_views)
+                all_projected,
+                len(global_views),
             )
             loss = (gg_loss + gl_loss + ll_loss) / 3
             diagnostics = _grouped_pair_diagnostics(
@@ -238,23 +253,23 @@ class JointCW(Module):
             )
             diagnostics.update(loss_diagnostics)
 
-            embedding = g_features.detach()
             return JointCWOutput(
                 loss=loss,
                 gg_loss=gg_loss,
                 gl_loss=gl_loss,
                 ll_loss=ll_loss,
-                embedding=embedding,
+                embedding=g_features.detach(),
                 diagnostics=diagnostics,
             )
-        else:
-            assert images is not None, "images must be provided in eval mode"
-            embedding = self.backbone(images)
-            zero = torch.tensor(0.0, device=images.device)
-            return JointCWOutput(
-                loss=zero,
-                gg_loss=zero,
-                gl_loss=zero,
-                ll_loss=zero,
-                embedding=embedding,
-            )   
+
+        if images is None:
+            raise ValueError("images must be provided in evaluation mode")
+        embedding = self.backbone(images)
+        zero = embedding.new_zeros(())
+        return JointCWOutput(
+            loss=zero,
+            gg_loss=zero,
+            gl_loss=zero,
+            ll_loss=zero,
+            embedding=embedding,
+        )

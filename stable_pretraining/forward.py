@@ -15,6 +15,8 @@ Available forward functions:
     - ``dino`` — DINO self-distillation with multi-crop
     - ``dinov2`` — DINOv2 with iBOT masked patch prediction
     - ``lejepa`` — LeJEPA multi-view invariance with SIGReg
+    - ``joint_cw`` — averaged pairwise Joint-CW regularization
+    - ``multi_cw`` — image-grouped multiview Cramér–Wold regularization
     - ``frozen_backbone_probe`` — frozen backbone for post-hoc probing
     - ``lejepa_linear_probe`` — frozen LeJEPA backbone for post-hoc probing
 
@@ -156,9 +158,7 @@ def lejepa(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
 
     out["loss"] = output.loss
     out["embedding"] = output.embedding
-    self.log(
-        f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True
-    )
+    self.log(f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True)
     self.log(
         f"{stage}/inv", output.inv_loss, on_step=True, on_epoch=True, sync_dist=True
     )
@@ -170,6 +170,94 @@ def lejepa(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
         sync_dist=True,
     )
     return out
+
+
+def _cw_pretraining_forward(
+    self,
+    batch: dict[str, Any],
+    stage: str,
+) -> dict[str, torch.Tensor]:
+    """Adapt named multiview batches to a CW method's model interface."""
+    out: dict[str, torch.Tensor] = {}
+
+    if stage == "fit":
+        global_views, local_views, _ = _get_views_by_prefix(
+            batch,
+            global_prefix="global",
+            local_prefix="local",
+        )
+        output = self.model(
+            global_views=[view["image"] for view in global_views],
+            local_views=[view["image"] for view in local_views],
+        )
+        if "label" in global_views[0]:
+            out["label"] = torch.cat([view["label"].long() for view in global_views])
+    else:
+        output = self.model(images=batch["image"])
+        if "label" in batch:
+            out["label"] = batch["label"].long()
+
+    out["loss"] = output.loss
+    out["embedding"] = output.embedding
+    self.log(
+        f"{stage}/loss",
+        output.loss,
+        on_step=True,
+        on_epoch=True,
+        sync_dist=True,
+    )
+    if output.diagnostics is not None:
+        for name, value in output.diagnostics.items():
+            self.log(
+                f"{stage}/{name}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                sync_dist=True,
+            )
+    return out
+
+
+def multi_cw(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
+    """Forward function for image-grouped multiview Cramér–Wold pretraining.
+
+    Args:
+        self: Module instance with a ``model`` attribute containing
+            :class:`stable_pretraining.methods.MultiCW`.
+        batch: Training batches contain named ``global_*`` and ``local_*``
+            views. Validation and test batches contain a single ``"image"``
+            tensor and optional ``"label"``.
+        stage: Lightning stage name. ``"fit"`` runs the multiview objective;
+            other stages run single-view feature extraction.
+
+    Returns:
+        Dictionary containing scalar ``"loss"``, backbone ``"embedding"``,
+        and ``"label"`` when labels are available.
+
+    Note:
+        Views are passed in global-first order. ``MultiCW`` restores the
+        image-major shape ``[B, G + L, D]`` before CW evaluation.
+    """
+    return _cw_pretraining_forward(self, batch, stage)
+
+
+def joint_cw(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
+    """Forward function for pairwise GG, GL, and LL Joint-CW pretraining.
+
+    Args:
+        self: Module instance with a ``model`` attribute containing
+            :class:`stable_pretraining.methods.JointCW`.
+        batch: Training batches contain named ``global_*`` and ``local_*``
+            views. Validation and test batches contain a single ``"image"``
+            tensor and optional ``"label"``.
+        stage: Lightning stage name. ``"fit"`` runs the pairwise objective;
+            other stages run single-view feature extraction.
+
+    Returns:
+        Dictionary containing scalar ``"loss"``, backbone ``"embedding"``,
+        and ``"label"`` when labels are available.
+    """
+    return _cw_pretraining_forward(self, batch, stage)
 
 
 def lejepa_linear_probe(

@@ -10,12 +10,15 @@ from .dinov3 import DINOv3
 from .ibot import iBOT
 from .igpt import iGPT
 from .ijepa import IJEPA
+from .joint_cw import JointCW
 from .mae import MAE
 from .lejepa import LeJEPA
 from .maskfeat import MaskFeat
 from .mim_refiner import MIMRefiner
 from .mocov2 import MoCov2
 from .mocov3 import MoCov3
+from .multi_cw import MultiViewBlockCWLoss, MultiViewCWDecomposition
+from .multi_cw_method import MultiCW
 from .msn import MSN
 from .nepa import NEPA
 from .nnclr import NNCLR
@@ -45,12 +48,16 @@ __all__ = [
     "iBOT",
     "iGPT",
     "IJEPA",
+    "JointCW",
     "MAE",
     "LeJEPA",
     "MaskFeat",
     "MIMRefiner",
     "MoCov2",
     "MoCov3",
+    "MultiCW",
+    "MultiViewBlockCWLoss",
+    "MultiViewCWDecomposition",
     "MSN",
     "NEPA",
     "NNCLR",

@@ -7,6 +7,20 @@ ROOT_DIR="${ROOT_DIR:-$(pwd)}"
 # Core run selection. STAGE can be: pretrain, probe, probe_simple, probe_dino,
 # probe_all, both, both_simple, both_dino, both_all.
 export METHOD="${METHOD:-lejepa}"
+case "${METHOD}" in
+  lejepa)
+    ;;
+  MultiCW|multicw|multi_cw|multi-cw)
+    export METHOD="multicw"
+    ;;
+  JointCW|jointcw|joint_cw|joint-cw)
+    export METHOD="jointcw"
+    ;;
+  *)
+    echo "Unknown METHOD=${METHOD}; expected lejepa, multicw, or jointcw." >&2
+    exit 2
+    ;;
+esac
 export STAGE="${STAGE:-both}"
 export PRETRAIN_CONFIG="${PRETRAIN_CONFIG:-${ROOT_DIR}/benchmarks/imagenet100/lejepa_pretrain.yaml}"
 export PROBE_CONFIG="${PROBE_CONFIG:-${ROOT_DIR}/benchmarks/imagenet100/lejepa_linear_probe.yaml}"
@@ -127,8 +141,65 @@ export N_SLICES="${N_SLICES:-1024}"
 export N_POINTS="${N_POINTS:-17}"
 export T_MAX="${T_MAX:-3.0}"
 
+# MultiCW loss. Select it with:
+#   METHOD=multicw STAGE=pretrain ./run_lejepa.sh
+# Pairwise JointCW remains available separately with ``METHOD=jointcw``.
+export N_GLOBAL="${N_GLOBAL:-2}"
+export N_LOCAL="${N_LOCAL:-6}"
+export CW_VARIANT="${CW_VARIANT:-canonical}"
+export RHO_GG="${RHO_GG:-0.88}"
+export RHO_GL="${RHO_GL:-0.72}"
+export RHO_LL="${RHO_LL:-0.61}"
+export W_JOINT="${W_JOINT:-0.60}"
+export W_COLLECTIVE_MAJOR="${W_COLLECTIVE_MAJOR:-0.25}"
+export W_COLLECTIVE_MINOR="${W_COLLECTIVE_MINOR:-0.05}"
+export W_GLOBAL_RESIDUAL="${W_GLOBAL_RESIDUAL:-0.03}"
+export W_LOCAL_RESIDUAL="${W_LOCAL_RESIDUAL:-0.07}"
+
+export JCW_BETA="${JCW_BETA:-${BETA:-1.0}}"
+export JCW_W_PLUS="${JCW_W_PLUS:-${W_PLUS:-null}}"
+
 # The YAML uses the standard LeJEPA 2 global + 6 local crop recipe.
 # To change the number of crops, edit benchmarks/imagenet100/lejepa_pretrain.yaml.
+
+METHOD_ARGS=()
+if [[ "${METHOD}" == "multicw" ]]; then
+  METHOD_ARGS=(
+    "module.forward=stable_pretraining.forward.multi_cw"
+    "module.model._target_=stable_pretraining.methods.MultiCW"
+    "~module.model.sigreg"
+    "~module.model.lamb"
+    "~module.model.n_slices"
+    "~module.model.n_points"
+    "~module.model.t_max"
+    "+module.model.n_global=${N_GLOBAL}"
+    "+module.model.n_local=${N_LOCAL}"
+    "+module.model.cw_variant=${CW_VARIANT}"
+    "+module.model.rho_gg=${RHO_GG}"
+    "+module.model.rho_gl=${RHO_GL}"
+    "+module.model.rho_ll=${RHO_LL}"
+    "+module.model.w_joint=${W_JOINT}"
+    "+module.model.w_collective_major=${W_COLLECTIVE_MAJOR}"
+    "+module.model.w_collective_minor=${W_COLLECTIVE_MINOR}"
+    "+module.model.w_global_residual=${W_GLOBAL_RESIDUAL}"
+    "+module.model.w_local_residual=${W_LOCAL_RESIDUAL}"
+  )
+elif [[ "${METHOD}" == "jointcw" ]]; then
+  METHOD_ARGS=(
+    "module.forward=stable_pretraining.forward.joint_cw"
+    "module.model._target_=stable_pretraining.methods.JointCW"
+    "~module.model.sigreg"
+    "~module.model.lamb"
+    "~module.model.n_slices"
+    "~module.model.n_points"
+    "~module.model.t_max"
+    "+module.model.rho_gg=${RHO_GG}"
+    "+module.model.rho_gl=${RHO_GL}"
+    "+module.model.rho_ll=${RHO_LL}"
+    "+module.model.beta=${JCW_BETA}"
+    "+module.model.w_plus=${JCW_W_PLUS}"
+  )
+fi
 
 # Pretraining optimization.
 export EPOCHS="${EPOCHS:-20}"
@@ -303,6 +374,7 @@ write_pretrain_manifest() {
 
   cat > "${RUN_MANIFEST}" <<EOF
 run_group: ${RUN_GROUP}
+method: ${METHOD}
 run_name: ${run_name}
 seed: ${SEED}
 output_dir: ${OUTPUT_DIR}
@@ -327,7 +399,7 @@ run_pretrain() {
   fi
   cp "${PRETRAIN_CONFIG}" "${CONFIG_ARCHIVE_DIR}/pretrain.yaml"
   build_logger_args pretrain
-  spt run "${PRETRAIN_CONFIG}" "${LOGGER_ARGS[@]}"
+  spt run "${PRETRAIN_CONFIG}" "${METHOD_ARGS[@]}" "${LOGGER_ARGS[@]}"
   local ckpt
   ckpt="$(pretrain_last_ckpt)"
   if [[ -f "$(dirname "$(dirname "${ckpt}")")/hparams.yaml" ]]; then
