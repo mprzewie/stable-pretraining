@@ -1,9 +1,4 @@
-"""LeJEPA ViT-Base on ImageNet-10 (Imagenette).
-
-Multi-view invariance + Epps-Pulley goodness-of-fit (SIGReg).
-Uses 2 global views (224x224) + 6 local views (96x96) matching
-the official LeJEPA augmentation strategy.
-"""
+"""Joint-CW ViT-S/16 on ImageNet-10 (Imagenette) with W&B logging."""
 
 import os
 import sys
@@ -14,16 +9,11 @@ import torch
 import torch.nn as nn
 import torchmetrics
 
-# Multi-worker DataLoaders pass sample tensors between processes via file
-# descriptors by default; with the multi-view (8 crops/sample) pipeline and
-# many workers this overflows the open-fd limit on some nodes, raising
-# "RuntimeError: received 0 items of ancdata". The file_system strategy passes
-# shared-memory files by name instead, avoiding the fd limit.
 torch.multiprocessing.set_sharing_strategy("file_system")
 
 import stable_pretraining as spt  # noqa: E402
 from stable_pretraining.data import transforms  # noqa: E402
-from stable_pretraining.methods.lejepa import LeJEPA, LeJEPAOutput  # noqa: E402
+from stable_pretraining.methods.joint_cw import JointCW, JointCWOutput  # noqa: E402
 
 
 def _photometric_transforms() -> list:
@@ -56,15 +46,6 @@ def _local_transform():
     )
 
 
-def _optional_float_or_str_env(name: str):
-    value = os.environ.get(name)
-    if value in (None, "", "none", "null", "None"):
-        return None
-    if value == "silverman":
-        return value
-    return float(value)
-
-
 def _wandb_tags() -> list[str]:
     return [
         tag.strip()
@@ -73,63 +54,56 @@ def _wandb_tags() -> list[str]:
     ]
 
 
-def lejepa_forward(self, batch, stage):
-    """LeJEPA forward: multi-view invariance + Epps-Pulley goodness-of-fit (SIGReg).
-
-    Expects ``self`` to have attributes:
-        - ``backbone``: Feature extraction network
-        - ``projector``: Projection head
-        - ``sigreg``: :class:`SlicedEppsPulley` module
-        - ``lamb``: SIGReg weight λ
-
-    Batch format:
-        - Training: dict of named views (``"global_0"``, ``"local_2"``, etc.)
-        - Eval: single dict with ``"image"`` key
-
-    Args:
-        self: Module instance (automatically bound).
-        batch: Named view dict or single-image dict.
-        stage: Training stage ('train', 'val', or 'test').
-
-    Returns:
-        Dictionary with ``"loss"``, ``"embedding"``, and optionally ``"label"``.
-    """
+def joint_cw_forward(self, batch, stage):
+    """Run Joint-CW on named training views or a single evaluation image."""
     out = {}
-
     images = batch.get("image")
     if stage == "fit":
         global_views = [
             batch[key]["image"] for key in batch if key.startswith("global")
         ]
-        local_views = [batch[key]["image"] for key in batch if key.startswith("local")]
+        local_views = [
+            batch[key]["image"] for key in batch if key.startswith("local")
+        ]
         labels = next(
             batch[key]["label"]
             for key in batch
             if key.startswith("global") or key.startswith("local")
         )
-
-        output: LeJEPAOutput = self.model.forward(
-            global_views=global_views, local_views=local_views, images=images
+        output: JointCWOutput = self.model.forward(
+            global_views=global_views,
+            local_views=local_views,
+            images=images,
         )
         out["label"] = labels.repeat(len(global_views))
     else:
-        output: LeJEPAOutput = self.model.forward(images=images)
+        output: JointCWOutput = self.model.forward(images=images)
         out["label"] = batch["label"].long()
 
     out["loss"] = output.loss
     out["embedding"] = output.embedding
-
+    self.log(f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True)
     self.log(
-        f"{stage}/sigreg",
-        output.sigreg_loss,
+        f"{stage}/joint_cw_gg",
+        output.gg_loss,
         on_step=True,
         on_epoch=True,
         sync_dist=True,
     )
     self.log(
-        f"{stage}/inv", output.inv_loss, on_step=True, on_epoch=True, sync_dist=True
+        f"{stage}/joint_cw_gl",
+        output.gl_loss,
+        on_step=True,
+        on_epoch=True,
+        sync_dist=True,
     )
-    self.log(f"{stage}/loss", output.loss, on_step=True, on_epoch=True, sync_dist=True)
+    self.log(
+        f"{stage}/joint_cw_ll",
+        output.ll_loss,
+        on_step=True,
+        on_epoch=True,
+        sync_dist=True,
+    )
     if stage == "fit" and output.diagnostics:
         self.log_dict(
             {
@@ -152,25 +126,22 @@ def main():
     num_gpus = 1
     batch_size = int(os.environ.get("BATCH_SIZE", "128"))
     num_workers = int(os.environ.get("NUM_WORKERS", "16"))
-    max_epochs = int(os.environ.get("MAX_EPOCHS", 200))
+    max_epochs = int(os.environ.get("MAX_EPOCHS", "200"))
     warmup_epochs = float(os.environ.get("WARMUP_EPOCHS", "10"))
     end_lr_divisor = float(os.environ.get("END_LR_DIVISOR", "1000"))
     global_views = 2
     all_views = 8
 
     data_dir = str(get_data_dir("imagenet10"))
-
-    # 2 global views (blur p=1.0, p=0.1) + 6 local views
     train_transform = transforms.MultiViewTransform(
         {
-            **{f"global_{i}": _global_transform() for i in range(global_views)},
+            **{f"global_{index}": _global_transform() for index in range(global_views)},
             **{
-                f"local_{i}": _local_transform()
-                for i in range(all_views - global_views)
+                f"local_{index}": _local_transform()
+                for index in range(all_views - global_views)
             },
         }
     )
-
     val_transform = transforms.Compose(
         transforms.RGB(),
         transforms.Resize((256, 256)),
@@ -207,21 +178,25 @@ def main():
         ),
     )
 
-    model = LeJEPA(
+    gamma = float(os.environ.get("JCW_GAMMA", "0.5"))
+    rho_gg = float(os.environ.get("RHO_GG", "0.88"))
+    rho_gl = float(os.environ.get("RHO_GL", "0.72"))
+    rho_ll = float(os.environ.get("RHO_LL", "0.61"))
+    beta = float(os.environ.get("BETA", "1.0"))
+    w_plus_env = os.environ.get("W_PLUS")
+    w_plus = float(w_plus_env) if w_plus_env not in (None, "") else None
+    model = JointCW(
         encoder_name="vit_small_patch16_224",
-        lamb=float(os.environ.get("LAMB", "0.02")),
-        n_slices=int(os.environ.get("N_SLICES", "1024")),
-        n_points=int(os.environ.get("N_POINTS", "17")),
-        sigreg=os.environ.get("SIGREG", "ep"),
-        override_sr_gamma=_optional_float_or_str_env("OVERRIDE_SR_GAMMA"),
-        diagnostic_rho_gg=float(os.environ.get("RHO_GG", "0.88")),
-        diagnostic_rho_gl=float(os.environ.get("RHO_GL", "0.72")),
-        diagnostic_rho_ll=float(os.environ.get("RHO_LL", "0.61")),
+        override_sr_gamma=gamma,
+        rho_gg=rho_gg,
+        rho_gl=rho_gl,
+        rho_ll=rho_ll,
+        beta=beta,
+        w_plus=w_plus,
     )
-
     module = spt.Module(
         model=model,
-        forward=lejepa_forward,
+        forward=joint_cw_forward,
         optim={
             "optimizer": {
                 "type": "AdamW",
@@ -244,21 +219,22 @@ def main():
         entity=os.environ.get("WANDB_ENTITY", "stable-ssl"),
         project=os.environ.get("WANDB_PROJECT", "imagenet10-methods"),
         group=os.environ.get("WANDB_GROUP") or None,
-        name=os.environ.get("WANDB_NAME", "lejepa-vits-inet10"),
+        name=os.environ.get("WANDB_NAME", "joint-cw-vits-inet10"),
         tags=_wandb_tags() or None,
         config={
-            "method": "lejepa",
+            "method": "joint_cw",
             "dataset": "frgfm/imagenette",
             "encoder_name": "vit_small_patch16_224",
             "seed": seed,
             "batch_size": batch_size,
             "num_global_views": global_views,
             "num_local_views": all_views - global_views,
-            "lejepa.sigreg": os.environ.get("SIGREG", "ep"),
-            "lejepa.gamma": os.environ.get("OVERRIDE_SR_GAMMA", "method_default"),
-            "lejepa.lambda": float(os.environ.get("LAMB", "0.02")),
-            "lejepa.n_slices": int(os.environ.get("N_SLICES", "1024")),
-            "lejepa.n_points": int(os.environ.get("N_POINTS", "17")),
+            "joint_cw.gamma": gamma,
+            "joint_cw.rho_gg": rho_gg,
+            "joint_cw.rho_gl": rho_gl,
+            "joint_cw.rho_ll": rho_ll,
+            "joint_cw.beta": beta,
+            "joint_cw.w_plus": model.w_plus,
         },
         log_model=False,
     )
@@ -298,9 +274,9 @@ def main():
             pl.pytorch.callbacks.ModelCheckpoint(
                 dirpath=os.environ.get(
                     "BENCHMARK_CHECKPOINT_DIR",
-                    str(Path(__file__).parent / "checkpoints" / "lejepa-vits"),
+                    str(Path(__file__).parent / "checkpoints" / "joint-cw-vits"),
                 ),
-                filename="lejepa-vits-{epoch:03d}",
+                filename="joint-cw-vits-{epoch:03d}",
                 save_top_k=-1,
                 every_n_epochs=300,
                 save_last=True,
@@ -311,11 +287,10 @@ def main():
         precision="16-mixed",
         devices=num_gpus,
         accelerator="gpu",
-        strategy="ddp_find_unused_parameters_true" if num_gpus > 1 else "auto",
+        strategy="auto",
     )
 
-    manager = spt.Manager(trainer=trainer, module=module, data=data)
-    manager()
+    spt.Manager(trainer=trainer, module=module, data=data)()
 
 
 if __name__ == "__main__":

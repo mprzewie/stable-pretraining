@@ -580,13 +580,14 @@ class Manager(submitit.helpers.Checkpointable):
         if not has_run_dir and not has_ckpt:
             return
 
-        # Check run_dir first (cache_dir mode), then CWD (legacy)
+        # Cache-dir runs must only trust their own sidecar. Falling back to a
+        # shared CWD here can attach a fresh parallel job to an unrelated run.
         sidecar = None
         if hasattr(self, "_run_dir"):
             candidate = self._run_dir / _WANDB_RESUME_FILENAME
             if candidate.is_file():
                 sidecar = candidate
-        if sidecar is None:
+        else:
             candidate = Path(_WANDB_RESUME_FILENAME)
             if candidate.is_file():
                 sidecar = candidate
