@@ -68,6 +68,7 @@ module:
     pretrained: ${eval:${oc.env:PRETRAINED_BACKBONE,0}}
     drop_path_rate: ${eval:${oc.env:DROP_PATH_RATE,0.1}}
     sigreg: ${oc.env:SIGREG,ep}
+    apply_sigreg_on: ${oc.env:APPLY_SIGREG_ON,all}
     override_sr_gamma: ${oc.decode:${oc.env:OVERRIDE_SR_GAMMA,null}}
     lamb: ${eval:${oc.env:LAMB,0.02}}
     n_slices: ${eval:${oc.env:N_SLICES,1024}}

@@ -46,112 +46,136 @@ from cw_torch.metric import cw_normality
 
 
 @torch.no_grad()
-def pair_diagnostics(
-    z1: torch.Tensor, z2: torch.Tensor, rho: float
+def anchor_diagnostics(
+    all_projected: torch.Tensor,
+    n_global: int,
+    *,
+    compute_spectrum: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """Measure how a projected view pair compares with its target correlation.
+    """Diagnostics aligned with the Anchor-CW hypothesis.
+
+    The routine compares global-view anchors with all-view anchors and measures
+    between-image anchor variance versus within-image augmentation variance. It
+    intentionally avoids the expensive per-view ``B x B`` similarity matrices
+    used by the previous joint-CW diagnostics.
 
     Args:
-        z1: First projected view with shape ``[batch, features]``.
-        z2: Second projected view with shape ``[batch, features]``.
-        rho: Target correlation between the two views.
+        all_projected: Projected views with shape ``[views, batch, features]``.
+        n_global: Number of leading global views.
+        compute_spectrum: Also compute effective/stable ranks of the anchor
+            matrices. This is useful occasionally, but more expensive than the
+            remaining scalar diagnostics.
 
     Returns:
-        Detached scalar diagnostics for the view pair.
+        Detached scalar diagnostics. All calculations are performed in float32.
     """
-    if z1.ndim != 2 or z1.shape != z2.shape:
-        raise ValueError("z1 and z2 must be same-shaped two-dimensional tensors.")
-    if not -1.0 < rho < 1.0:
-        raise ValueError(f"rho must be between -1 and 1, got {rho}.")
+    if all_projected.ndim != 3:
+        raise ValueError(
+            "all_projected must have shape [views, batch, features]."
+        )
+
+    n_views, batch_size, _ = all_projected.shape
+    if not 0 < n_global <= n_views:
+        raise ValueError(
+            f"n_global must be in [1, {n_views}], got {n_global}."
+        )
+    if batch_size < 1:
+        raise ValueError("all_projected must contain at least one sample.")
 
     eps = 1e-8
-    batch_size = z1.shape[0]
+    z = all_projected.detach().float()
+    global_views = z[:n_global]
+    local_views = z[n_global:]
 
-    # Quantiles are not implemented for all reduced-precision device dtypes.
-    z1 = z1.detach().float()
-    z2 = z2.detach().float()
-    z1c = z1 - z1.mean(dim=0, keepdim=True)
-    z2c = z2 - z2.mean(dim=0, keepdim=True)
+    global_centers = global_views.mean(dim=0)
+    all_centers = z.mean(dim=0)
 
-    var1 = z1c.square().mean(dim=0)
-    var2 = z2c.square().mean(dim=0)
-    cross_diag = (z1c * z2c).mean(dim=0)
-    corr_per_dim = cross_diag / torch.sqrt(var1 * var2).clamp_min(eps)
+    global_centered = global_centers - global_centers.mean(dim=0, keepdim=True)
+    all_centered = all_centers - all_centers.mean(dim=0, keepdim=True)
 
-    mse_per_dim = (z1 - z2).square().mean()
-    target_mse = z1.new_tensor(2.0 * (1.0 - rho))
+    global_residuals = global_views - global_centers.unsqueeze(0)
+    all_residuals = z - all_centers.unsqueeze(0)
 
-    z_plus = (z1 + z2) / math.sqrt(2.0 * (1.0 + rho))
-    z_minus = (z1 - z2) / math.sqrt(2.0 * (1.0 - rho))
-    plus_var = (z_plus - z_plus.mean(0)).square().mean()
-    minus_var = (z_minus - z_minus.mean(0)).square().mean()
+    total_centered = z - z.mean(dim=(0, 1), keepdim=True)
+    total_variance = total_centered.square().mean()
+    all_between_variance = all_centered.square().mean()
+    all_within_variance = all_residuals.square().mean()
 
-    n1 = F.normalize(z1, dim=-1)
-    n2 = F.normalize(z2, dim=-1)
-    similarities = n1 @ n2.T
+    diagnostics: dict[str, torch.Tensor] = {
+        # Geometry of the two possible Anchor-CW inputs.
+        "anchor/global/feature_variance": global_centered.square().mean(),
+        "anchor/all/feature_variance": all_between_variance,
+        "anchor/global/mean_norm": global_centers.norm(dim=-1).mean(),
+        "anchor/all/mean_norm": all_centers.norm(dim=-1).mean(),
+        "anchor/global_all/mse": (global_centers - all_centers).square().mean(),
+        "anchor/global_all/cosine": F.cosine_similarity(
+            global_centers, all_centers, dim=-1, eps=eps
+        ).mean(),
 
-    labels = torch.arange(batch_size, device=z1.device)
-    retrieval_top1 = (similarities.argmax(dim=1) == labels).float().mean()
+        # Within-image augmentation spread under the two center definitions.
+        "residual/global_views_to_global/mse": global_residuals.square().mean(),
+        "residual/all_views_to_all/mse": all_within_variance,
 
-    positive = similarities.diag()
-    negative = similarities.masked_fill(
-        torch.eye(batch_size, device=z1.device, dtype=torch.bool),
-        float("-inf"),
-    ).max(dim=1).values
-
-    return {
-        "mse_per_dim": mse_per_dim,
-        "target_mse_per_dim": target_mse,
-        "mse_target_ratio": mse_per_dim / target_mse.clamp_min(eps),
-        "rho_mean": corr_per_dim.mean(),
-        "rho_std": corr_per_dim.std(),
-        "rho_p10": corr_per_dim.quantile(0.10),
-        "rho_median": corr_per_dim.median(),
-        "rho_p90": corr_per_dim.quantile(0.90),
-        "plus_var": plus_var,
-        "minus_var": minus_var,
-        "r_plus_minus": plus_var / minus_var.clamp_min(eps),
-        "pair_retrieval_top1": retrieval_top1,
-        "positive_similarity": positive.mean(),
-        "positive_hard_negative_margin": (positive - negative).mean(),
-        "feature_var_1": var1.mean(),
-        "feature_var_2": var2.mean(),
+        # Exact ANOVA-style decomposition for the all-view mean.
+        "variance/all/total": total_variance,
+        "variance/all/between": all_between_variance,
+        "variance/all/within": all_within_variance,
+        "variance/all/between_fraction": all_between_variance
+        / total_variance.clamp_min(eps),
+        "variance/all/decomposition_error": (
+            total_variance - all_between_variance - all_within_variance
+        ).abs()
+        / total_variance.clamp_min(eps),
     }
+
+    if len(local_views) > 0:
+        local_centers = local_views.mean(dim=0)
+        local_to_global = local_views - global_centers.unsqueeze(0)
+        diagnostics.update(
+            {
+                "residual/local_views_to_global/mse": local_to_global.square().mean(),
+                "anchor/global_local/mse": (
+                    global_centers - local_centers
+                ).square().mean(),
+                "anchor/global_local/cosine": F.cosine_similarity(
+                    global_centers, local_centers, dim=-1, eps=eps
+                ).mean(),
+            }
+        )
+
+    if compute_spectrum:
+        diagnostics.update(_anchor_spectrum_diagnostics(global_centers, "global"))
+        diagnostics.update(_anchor_spectrum_diagnostics(all_centers, "all"))
+
+    return diagnostics
 
 
 @torch.no_grad()
-def _grouped_pair_diagnostics(
-    all_projected: torch.Tensor,
-    n_global: int,
-    rhos: dict[str, float],
+def _anchor_spectrum_diagnostics(
+    anchors: torch.Tensor, prefix: str
 ) -> dict[str, torch.Tensor]:
-    """Average diagnostics within global/global, global/local, and local/local."""
-    grouped: dict[str, list[dict[str, torch.Tensor]]] = {
-        "gg": [],
-        "gl": [],
-        "ll": [],
-    }
-    for i in range(len(all_projected)):
-        for j in range(i + 1, len(all_projected)):
-            if i < n_global and j < n_global:
-                group = "gg"
-            elif i < n_global or j < n_global:
-                group = "gl"
-            else:
-                group = "ll"
-            grouped[group].append(
-                pair_diagnostics(all_projected[i], all_projected[j], rhos[group])
-            )
+    """Return rank diagnostics without forming a feature covariance matrix."""
+    eps = 1e-12
+    centered = anchors.float() - anchors.float().mean(dim=0, keepdim=True)
+    if centered.shape[0] < 2:
+        zero = centered.new_zeros(())
+        return {
+            f"anchor/{prefix}/effective_rank": zero,
+            f"anchor/{prefix}/stable_rank": zero,
+        }
 
-    diagnostics = {}
-    for group, pair_metrics in grouped.items():
-        if not pair_metrics:
-            continue
-        for name in pair_metrics[0]:
-            diagnostics[f"{group}/{name}"] = torch.stack(
-                [metrics[name] for metrics in pair_metrics]
-            ).mean()
-    return diagnostics
+    singular_values = torch.linalg.svdvals(centered)
+    energy = singular_values.square()
+    total = energy.sum().clamp_min(eps)
+    probabilities = energy / total
+    effective_rank = torch.exp(
+        -(probabilities * probabilities.clamp_min(eps).log()).sum()
+    )
+    stable_rank = total / energy.max().clamp_min(eps)
+    return {
+        f"anchor/{prefix}/effective_rank": effective_rank,
+        f"anchor/{prefix}/stable_rank": stable_rank,
+    }
 
 
 class EppsPulley(nn.Module):
@@ -285,8 +309,8 @@ class LeJEPAOutput(ModelOutput):
     :ivar embedding: Backbone embeddings [V*N, D] (train) or [N, D] (eval).
     :ivar inv_loss: Invariance component.
     :ivar sigreg_loss: Epps-Pulley goodness-of-fit component.
-    :ivar diagnostics: Detached pair metrics grouped under ``gg/``, ``gl/``,
-        and ``ll/`` keys.
+    :ivar diagnostics: Optional detached Anchor-CW geometry metrics. Diagnostics
+        are disabled by default.
     """
 
     loss: torch.Tensor = None
@@ -317,12 +341,14 @@ class LeJEPA(Module):
     :param n_points: EP quadrature nodes (default: 17)
     :param lamb: SIGReg weight λ (default: 0.02)
     :param pretrained: Load pretrained timm weights
-    :param diagnostic_rho_gg: Target correlation used only for global/global
-        pair diagnostics.
-    :param diagnostic_rho_gl: Target correlation used only for global/local
-        pair diagnostics.
-    :param diagnostic_rho_ll: Target correlation used only for local/local
-        pair diagnostics.
+    :param apply_sigreg_on: Inputs regularized by SIGReg/CW. ``"all"`` uses
+        every projected view, ``"centers_global"`` uses one global-view mean
+        per image, and ``"centers_all"`` uses one all-view mean per image.
+        The invariance MSE always retains LeJEPA's global-view center.
+    :param diagnostics_every_n_steps: Compute lightweight Anchor-CW diagnostics
+        every given number of training steps. ``None`` disables diagnostics.
+    :param diagnostics_compute_spectrum: Include effective/stable anchor ranks
+        whenever diagnostics are computed.
 
     Example::
 
@@ -372,10 +398,10 @@ class LeJEPA(Module):
         pretrained: bool = False,
         drop_path_rate: float = 0.1,
         sigreg: str = "ep",
+        apply_sigreg_on: str = "all",
         override_sr_gamma: float | str | None = None,
-        diagnostic_rho_gg: float = 0.88,
-        diagnostic_rho_gl: float = 0.72,
-        diagnostic_rho_ll: float = 0.61,
+        diagnostics_every_n_steps: int | None = None,
+        diagnostics_compute_spectrum: bool = False,
     ):
         super().__init__()
 
@@ -411,10 +437,9 @@ class LeJEPA(Module):
         self.projector = projector
 
         if override_sr_gamma is None:
-            # Method-specific defaults:
-            # original EP uses gamma=0.5
-            # CW uses Silverman
-            sr_gamma = 0.5 if sigreg == "ep" else None
+            # Fixed default used by the matched EP/CW experiments.
+            # Silverman remains available explicitly via ``"silverman"``.
+            sr_gamma = 0.5
         
         elif override_sr_gamma == "silverman":
             sr_gamma = None
@@ -440,19 +465,29 @@ class LeJEPA(Module):
                 f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep' or 'cw'"
             )
 
+        valid_sigreg_inputs = {"all", "centers_global", "centers_all"}
+        if apply_sigreg_on not in valid_sigreg_inputs:
+            raise ValueError(
+                f"Unknown apply_sigreg_on={apply_sigreg_on!r}; expected one of "
+                f"{sorted(valid_sigreg_inputs)}."
+            )
+        if diagnostics_every_n_steps is not None and diagnostics_every_n_steps <= 0:
+            raise ValueError("diagnostics_every_n_steps must be positive or None.")
+
         self.lamb = lamb
         self.embed_dim = embed_dim
-        self.diagnostic_rhos = {
-            "gg": diagnostic_rho_gg,
-            "gl": diagnostic_rho_gl,
-            "ll": diagnostic_rho_ll,
-        }
+        self.apply_sigreg_on = apply_sigreg_on
+        self.diagnostics_every_n_steps = diagnostics_every_n_steps
+        self.diagnostics_compute_spectrum = diagnostics_compute_spectrum
+        self.register_buffer(
+            "_diagnostic_step", torch.zeros((), dtype=torch.long), persistent=False
+        )
 
-    @staticmethod
     def _compute_loss(
+        self,
         all_projected: torch.Tensor,
         n_global: int,
-        sigreg: SlicedEppsPulley,
+        sigreg: nn.Module,
         lamb: float,
     ):
         """Compute the LeJEPA loss.
@@ -463,11 +498,24 @@ class LeJEPA(Module):
         :param lamb: SIGReg weight λ.
         :return: Tuple of (total_loss, inv_loss, sigreg_loss).
         """
-        centers = all_projected[:n_global].mean(0)  # [N, K]
-        inv_loss = (centers.unsqueeze(0) - all_projected).square().mean()
+        global_centers = all_projected[:n_global].mean(dim=0)  # [N, K]
+        all_centers = all_projected.mean(dim=0)  # [N, K]
 
-        sigreg_loss = sigreg(all_projected.reshape(-1, all_projected.size(-1)))
 
+        inv_loss = (global_centers.unsqueeze(0) - all_projected).square().mean()
+
+        if self.apply_sigreg_on == "all":
+            sigreg_inputs = all_projected.flatten(0, 1)
+        elif self.apply_sigreg_on == "centers_global":
+            sigreg_inputs = global_centers
+        elif self.apply_sigreg_on == "centers_all":
+            sigreg_inputs = all_centers
+        else:  # Guarded in __init__; retained for defensive programming.
+            raise RuntimeError(
+                f"Unexpected apply_sigreg_on={self.apply_sigreg_on!r}."
+            )
+
+        sigreg_loss = sigreg(sigreg_inputs)
         loss = inv_loss + lamb * sigreg_loss
         return loss, inv_loss, sigreg_loss
 
@@ -495,11 +543,16 @@ class LeJEPA(Module):
             loss, inv_loss, sigreg_loss = self._compute_loss(
                 all_projected, len(global_views), self.sigreg, self.lamb
             )
-            diagnostics = _grouped_pair_diagnostics(
-                all_projected,
-                len(global_views),
-                self.diagnostic_rhos,
-            )
+            diagnostics = None
+            if self.diagnostics_every_n_steps is not None:
+                step = int(self._diagnostic_step.item())
+                if step % self.diagnostics_every_n_steps == 0:
+                    diagnostics = anchor_diagnostics(
+                        all_projected,
+                        len(global_views),
+                        compute_spectrum=self.diagnostics_compute_spectrum,
+                    )
+                self._diagnostic_step.add_(1)
 
             embedding = g_features.detach()
             return LeJEPAOutput(
