@@ -510,6 +510,10 @@ class LeJEPA(Module):
             sigreg_inputs = global_centers
         elif self.apply_sigreg_on == "centers_all":
             sigreg_inputs = all_centers
+        elif self.apply_sigreg_on == "all_global":
+            sigreg_inputs = all_projected[:n_global].flatten(0, 1)
+        elif self.apply_sigreg_on == "one_global":
+            sigreg_inputs = all_projected[0]
         else:  # Guarded in __init__; retained for defensive programming.
             raise RuntimeError(
                 f"Unexpected apply_sigreg_on={self.apply_sigreg_on!r}."
