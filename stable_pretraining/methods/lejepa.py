@@ -299,6 +299,66 @@ class CWReg(nn.Module):
             gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
 
         return 2.0 * math.pi * x.shape[0] * cw_normality(x, gamma)
+    
+class ClusterUCWReg(nn.Module):
+    """Cluster-U Cramér–Wold regularizer toward N(0, I).
+
+    Expects representations grouped as [V, B, D]:
+        V: views per image
+        B: independent images
+        D: feature dimension
+    """
+
+    def __init__(self, gamma: float = 0.5):
+        super().__init__()
+        if gamma <= 0:
+            raise ValueError(f"gamma must be positive, got {gamma}.")
+        self.gamma = gamma
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 3:
+            raise ValueError(
+                f"Expected x with shape [V, B, D], got {tuple(x.shape)}."
+            )
+
+        num_views, num_groups, feature_dim = x.shape
+
+        if num_groups < 2:
+            raise ValueError(
+                "Cluster-U requires at least two independent image groups."
+            )
+
+        gamma = torch.as_tensor(
+            self.gamma,
+            device=x.device,
+            dtype=x.dtype,
+        )
+
+        # [V, B, D] -> [B, V, D]
+        grouped = x.permute(1, 0, 2).contiguous()
+
+        # Ordinary CW over all BV views.
+        flat = grouped.reshape(num_groups * num_views, feature_dim)
+        pooled_cw = cw_normality(flat, gamma)
+
+        # Average CW computed separately inside each image group.
+        within_cw = torch.stack(
+            [
+                cw_normality(group_views, gamma)
+                for group_views in grouped
+            ]
+        ).mean()
+
+        # Replaces the pooled data-data V-term with a U-statistic
+        # over independent image groups, while preserving all-view
+        # sample-to-Gaussian terms.
+        cluster_u_cw = (
+            num_groups * pooled_cw - within_cw
+        ) / (num_groups - 1)
+
+        # Preserve the exact external scaling used by CWReg.
+        sample_count = num_groups * num_views
+        return 2.0 * math.pi * sample_count * cluster_u_cw
 
 
 @dataclass
@@ -462,9 +522,11 @@ class LeJEPA(Module):
             )
         elif sigreg == "cw":
             self.sigreg = CWReg(gamma=sr_gamma)
+        elif sigreg == "cluster_ucw":
+            self.sigreg = ClusterUCWReg(gamma=sr_gamma)
         else:
             raise ValueError(
-                f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep' or 'cw'"
+                f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep', 'cw', or 'cluster_ucw'"
             )
 
         valid_sigreg_inputs = {
