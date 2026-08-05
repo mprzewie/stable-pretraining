@@ -52,11 +52,6 @@ def test_multi_cw_preserves_image_grouping_and_view_order(
             return loss, {"cw/joint": loss.detach()}
 
     model.multiview_cw = _CaptureLoss()
-    monkeypatch.setattr(
-        "stable_pretraining.methods.multi_cw_method._grouped_pair_diagnostics",
-        lambda *args, **kwargs: {},
-    )
-
     batch_size = 4
     global_views = [
         torch.full((batch_size, 3), float(index), requires_grad=True)

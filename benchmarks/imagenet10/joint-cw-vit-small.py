@@ -13,7 +13,9 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 
 import stable_pretraining as spt  # noqa: E402
 from stable_pretraining.data import transforms  # noqa: E402
+from stable_pretraining.forward import multi_cw as multi_cw_forward  # noqa: E402
 from stable_pretraining.methods.joint_cw import JointCW, JointCWOutput  # noqa: E402
+from stable_pretraining.methods.multi_cw_method import MultiCW  # noqa: E402
 
 
 def _photometric_transforms() -> list:
@@ -178,25 +180,91 @@ def main():
         ),
     )
 
-    gamma = float(os.environ.get("JCW_GAMMA", "0.5"))
+    cw_method = os.environ.get("CW_METHOD", "joint_cw")
+    gamma = float(os.environ.get("CW_GAMMA", os.environ.get("JCW_GAMMA", "0.5")))
     rho_gg = float(os.environ.get("RHO_GG", "0.88"))
     rho_gl = float(os.environ.get("RHO_GL", "0.72"))
     rho_ll = float(os.environ.get("RHO_LL", "0.61"))
-    beta = float(os.environ.get("BETA", "1.0"))
-    w_plus_env = os.environ.get("W_PLUS")
-    w_plus = float(w_plus_env) if w_plus_env not in (None, "") else None
-    model = JointCW(
-        encoder_name="vit_small_patch16_224",
-        override_sr_gamma=gamma,
-        rho_gg=rho_gg,
-        rho_gl=rho_gl,
-        rho_ll=rho_ll,
-        beta=beta,
-        w_plus=w_plus,
-    )
+    model_config = {
+        "method": cw_method,
+        "dataset": "frgfm/imagenette",
+        "encoder_name": "vit_small_patch16_224",
+        "seed": seed,
+        "batch_size": batch_size,
+        "num_global_views": global_views,
+        "num_local_views": all_views - global_views,
+    }
+    if cw_method == "joint_cw":
+        beta = float(os.environ.get("BETA", "1.0"))
+        w_plus_env = os.environ.get("W_PLUS")
+        w_plus = float(w_plus_env) if w_plus_env not in (None, "") else None
+        model = JointCW(
+            encoder_name="vit_small_patch16_224",
+            override_sr_gamma=gamma,
+            rho_gg=rho_gg,
+            rho_gl=rho_gl,
+            rho_ll=rho_ll,
+            beta=beta,
+            w_plus=w_plus,
+        )
+        forward = joint_cw_forward
+        model_config.update(
+            {
+                "joint_cw.gamma": gamma,
+                "joint_cw.rho_gg": rho_gg,
+                "joint_cw.rho_gl": rho_gl,
+                "joint_cw.rho_ll": rho_ll,
+                "joint_cw.beta": beta,
+                "joint_cw.w_plus": model.w_plus,
+            }
+        )
+    elif cw_method == "multi_cw":
+        cw_variant = os.environ.get("CW_VARIANT", "canonical")
+        weights = {
+            "w_joint": float(os.environ.get("W_JOINT", "0.60")),
+            "w_collective_major": float(
+                os.environ.get("W_COLLECTIVE_MAJOR", "0.25")
+            ),
+            "w_collective_minor": float(
+                os.environ.get("W_COLLECTIVE_MINOR", "0.05")
+            ),
+            "w_global_residual": float(
+                os.environ.get("W_GLOBAL_RESIDUAL", "0.03")
+            ),
+            "w_local_residual": float(
+                os.environ.get("W_LOCAL_RESIDUAL", "0.07")
+            ),
+        }
+        model = MultiCW(
+            encoder_name="vit_small_patch16_224",
+            override_sr_gamma=gamma,
+            n_global=global_views,
+            n_local=all_views - global_views,
+            rho_gg=rho_gg,
+            rho_gl=rho_gl,
+            rho_ll=rho_ll,
+            cw_variant=cw_variant,
+            **weights,
+        )
+        forward = multi_cw_forward
+        model_config.update(
+            {
+                "multi_cw.gamma": gamma,
+                "multi_cw.rho_gg": rho_gg,
+                "multi_cw.rho_gl": rho_gl,
+                "multi_cw.rho_ll": rho_ll,
+                "multi_cw.variant": cw_variant,
+                **{f"multi_cw.{name}": value for name, value in weights.items()},
+            }
+        )
+    else:
+        raise ValueError(
+            f"Unknown CW_METHOD={cw_method!r}; expected 'joint_cw' or 'multi_cw'"
+        )
+
     module = spt.Module(
         model=model,
-        forward=joint_cw_forward,
+        forward=forward,
         optim={
             "optimizer": {
                 "type": "AdamW",
@@ -221,21 +289,7 @@ def main():
         group=os.environ.get("WANDB_GROUP") or None,
         name=os.environ.get("WANDB_NAME", "joint-cw-vits-inet10"),
         tags=_wandb_tags() or None,
-        config={
-            "method": "joint_cw",
-            "dataset": "frgfm/imagenette",
-            "encoder_name": "vit_small_patch16_224",
-            "seed": seed,
-            "batch_size": batch_size,
-            "num_global_views": global_views,
-            "num_local_views": all_views - global_views,
-            "joint_cw.gamma": gamma,
-            "joint_cw.rho_gg": rho_gg,
-            "joint_cw.rho_gl": rho_gl,
-            "joint_cw.rho_ll": rho_ll,
-            "joint_cw.beta": beta,
-            "joint_cw.w_plus": model.w_plus,
-        },
+        config=model_config,
         log_model=False,
     )
 

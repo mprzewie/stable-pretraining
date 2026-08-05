@@ -41,10 +41,6 @@ def test_joint_cw_returns_separate_pair_group_losses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = _model(monkeypatch)
-    monkeypatch.setattr(
-        "stable_pretraining.methods.joint_cw._grouped_pair_diagnostics",
-        lambda *args, **kwargs: {},
-    )
     global_views = [
         torch.randn(4, 3, requires_grad=True),
         torch.randn(4, 3, requires_grad=True),

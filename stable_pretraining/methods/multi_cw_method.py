@@ -9,7 +9,6 @@ from transformers.utils import ModelOutput
 
 from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
-from stable_pretraining.methods.lejepa import _grouped_pair_diagnostics
 from stable_pretraining.methods.multi_cw import (
     MultiViewBlockCWLoss,
     MultiViewCWVariant,
@@ -109,11 +108,6 @@ class MultiCW(Module):
         )
         self.n_global = n_global
         self.n_local = n_local
-        self.diagnostic_rhos = {
-            "gg": rho_gg,
-            "gl": rho_gl,
-            "ll": rho_ll,
-        }
         self.embed_dim = embed_dim
 
     def _compute_loss(
@@ -190,18 +184,11 @@ class MultiCW(Module):
                 all_projected,
                 len(global_views),
             )
-            diagnostics = _grouped_pair_diagnostics(
-                all_projected,
-                len(global_views),
-                self.diagnostic_rhos,
-            )
-            diagnostics.update(loss_diagnostics)
-
             return MultiCWOutput(
                 loss=loss,
                 cw_loss=loss,
                 embedding=g_features.detach(),
-                diagnostics=diagnostics,
+                diagnostics=loss_diagnostics,
             )
 
         if images is None:

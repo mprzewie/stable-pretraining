@@ -11,7 +11,7 @@ from transformers.utils import ModelOutput
 
 from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
-from stable_pretraining.methods.lejepa import CWReg, _grouped_pair_diagnostics
+from stable_pretraining.methods.lejepa import CWReg
 
 
 class JointCWLoss(Module):
@@ -164,11 +164,6 @@ class JointCW(Module):
         )
         self.beta = beta
         self.w_plus = self.jcw_gg.w_plus
-        self.diagnostic_rhos = {
-            "gg": rho_gg,
-            "gl": rho_gl,
-            "ll": rho_ll,
-        }
         self.embed_dim = embed_dim
 
     def _compute_loss(
@@ -246,20 +241,13 @@ class JointCW(Module):
                 len(global_views),
             )
             loss = (gg_loss + gl_loss + ll_loss) / 3
-            diagnostics = _grouped_pair_diagnostics(
-                all_projected,
-                len(global_views),
-                self.diagnostic_rhos,
-            )
-            diagnostics.update(loss_diagnostics)
-
             return JointCWOutput(
                 loss=loss,
                 gg_loss=gg_loss,
                 gl_loss=gl_loss,
                 ll_loss=ll_loss,
                 embedding=g_features.detach(),
-                diagnostics=diagnostics,
+                diagnostics=loss_diagnostics,
             )
 
         if images is None:

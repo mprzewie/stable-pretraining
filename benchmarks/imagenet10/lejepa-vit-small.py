@@ -213,10 +213,8 @@ def main():
         n_slices=int(os.environ.get("N_SLICES", "1024")),
         n_points=int(os.environ.get("N_POINTS", "17")),
         sigreg=os.environ.get("SIGREG", "ep"),
+        apply_sigreg_on=os.environ.get("APPLY_SIGREG_ON", "all"),
         override_sr_gamma=_optional_float_or_str_env("OVERRIDE_SR_GAMMA"),
-        diagnostic_rho_gg=float(os.environ.get("RHO_GG", "0.88")),
-        diagnostic_rho_gl=float(os.environ.get("RHO_GL", "0.72")),
-        diagnostic_rho_ll=float(os.environ.get("RHO_LL", "0.61")),
     )
 
     module = spt.Module(
@@ -255,6 +253,7 @@ def main():
             "num_global_views": global_views,
             "num_local_views": all_views - global_views,
             "lejepa.sigreg": os.environ.get("SIGREG", "ep"),
+            "lejepa.apply_sigreg_on": os.environ.get("APPLY_SIGREG_ON", "all"),
             "lejepa.gamma": os.environ.get("OVERRIDE_SR_GAMMA", "method_default"),
             "lejepa.lambda": float(os.environ.get("LAMB", "0.02")),
             "lejepa.n_slices": int(os.environ.get("N_SLICES", "1024")),

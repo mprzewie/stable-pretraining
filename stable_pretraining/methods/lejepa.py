@@ -343,7 +343,9 @@ class LeJEPA(Module):
     :param pretrained: Load pretrained timm weights
     :param apply_sigreg_on: Inputs regularized by SIGReg/CW. ``"all"`` uses
         every projected view, ``"centers_global"`` uses one global-view mean
-        per image, and ``"centers_all"`` uses one all-view mean per image.
+        per image, ``"centers_all"`` uses one all-view mean per image,
+        ``"all_global"`` uses every global view, and ``"one_global"`` uses
+        the first global view.
         The invariance MSE always retains LeJEPA's global-view center.
     :param diagnostics_every_n_steps: Compute lightweight Anchor-CW diagnostics
         every given number of training steps. ``None`` disables diagnostics.
@@ -465,7 +467,13 @@ class LeJEPA(Module):
                 f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep' or 'cw'"
             )
 
-        valid_sigreg_inputs = {"all", "centers_global", "centers_all"}
+        valid_sigreg_inputs = {
+            "all",
+            "all_global",
+            "centers_all",
+            "centers_global",
+            "one_global",
+        }
         if apply_sigreg_on not in valid_sigreg_inputs:
             raise ValueError(
                 f"Unknown apply_sigreg_on={apply_sigreg_on!r}; expected one of "
