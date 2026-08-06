@@ -541,6 +541,11 @@ class LeJEPA(Module):
                 f"Unknown apply_sigreg_on={apply_sigreg_on!r}; expected one of "
                 f"{sorted(valid_sigreg_inputs)}."
             )
+        if sigreg == "cluster_ucw" and apply_sigreg_on != "all":
+            raise ValueError(
+                "ClusterUCWReg requires apply_sigreg_on='all' so image-group "
+                "and view membership are preserved."
+            )
         if diagnostics_every_n_steps is not None and diagnostics_every_n_steps <= 0:
             raise ValueError("diagnostics_every_n_steps must be positive or None.")
 
@@ -574,7 +579,13 @@ class LeJEPA(Module):
 
         inv_loss = (global_centers.unsqueeze(0) - all_projected).square().mean()
 
-        if self.apply_sigreg_on == "all":
+        if isinstance(sigreg, ClusterUCWReg):
+            if self.apply_sigreg_on != "all":
+                raise RuntimeError(
+                    "ClusterUCWReg requires apply_sigreg_on='all'."
+                )
+            sigreg_inputs = all_projected
+        elif self.apply_sigreg_on == "all":
             sigreg_inputs = all_projected.flatten(0, 1)
         elif self.apply_sigreg_on == "centers_global":
             sigreg_inputs = global_centers

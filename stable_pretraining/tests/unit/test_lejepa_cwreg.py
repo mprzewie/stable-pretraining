@@ -3,7 +3,12 @@
 import pytest
 import torch
 
-from stable_pretraining.methods.lejepa import CWReg, SlicedEppsPulley
+from stable_pretraining.methods.lejepa import (
+    CWReg,
+    ClusterUCWReg,
+    LeJEPA,
+    SlicedEppsPulley,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -119,3 +124,37 @@ def test_cwreg_and_sigreg_gradients_are_aligned() -> None:
     )
 
     assert cosine > 0.8
+
+
+def test_cluster_ucw_receives_grouped_views_from_lejepa() -> None:
+    model = LeJEPA.__new__(LeJEPA)
+    torch.nn.Module.__init__(model)
+    model.apply_sigreg_on = "all"
+    projected = torch.randn(4, 8, 16, requires_grad=True)
+
+    loss, inv_loss, sigreg_loss = model._compute_loss(
+        projected,
+        n_global=2,
+        sigreg=ClusterUCWReg(gamma=0.5),
+        lamb=0.02,
+    )
+    loss.backward()
+
+    assert loss.ndim == inv_loss.ndim == sigreg_loss.ndim == 0
+    assert torch.isfinite(loss)
+    assert projected.grad is not None
+    assert torch.isfinite(projected.grad).all()
+
+
+def test_cluster_ucw_rejects_ungrouped_sigreg_selection() -> None:
+    model = LeJEPA.__new__(LeJEPA)
+    torch.nn.Module.__init__(model)
+    model.apply_sigreg_on = "one_global"
+
+    with pytest.raises(RuntimeError, match="requires apply_sigreg_on='all'"):
+        model._compute_loss(
+            torch.randn(4, 8, 16),
+            n_global=2,
+            sigreg=ClusterUCWReg(gamma=0.5),
+            lamb=0.02,
+        )
