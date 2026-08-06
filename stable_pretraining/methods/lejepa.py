@@ -361,6 +361,24 @@ class ClusterUCWReg(nn.Module):
         return 2.0 * math.pi * sample_count * cluster_u_cw
 
 
+class UCWReg(ClusterUCWReg):
+    """Ordinary sample-level U-statistic CW regularizer.
+
+    Expects x with shape [N, D].
+    Removes only exact self-interactions.
+    """
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 2:
+            raise ValueError(
+                f"UCWReg expects [N, D], got {tuple(x.shape)}."
+            )
+
+        # [N, D] -> [V=1, B=N, D]
+        # Cluster-U with singleton groups is exactly ordinary U-CW.
+        return super().forward(x.unsqueeze(0))
+
+
 @dataclass
 class LeJEPAOutput(ModelOutput):
     """Output from LeJEPA forward pass.
@@ -522,11 +540,18 @@ class LeJEPA(Module):
             )
         elif sigreg == "cw":
             self.sigreg = CWReg(gamma=sr_gamma)
+        elif sigreg == "u_cw":
+            self.sigreg = UCWReg(gamma=sr_gamma)
         elif sigreg == "cluster_ucw":
             self.sigreg = ClusterUCWReg(gamma=sr_gamma)
+            assert apply_sigreg_on == "all", (
+                "ClusterUCWReg requires apply_sigreg_on='all' so image-group "
+                "and view membership are preserved."
+            )
         else:
             raise ValueError(
-                f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep', 'cw', or 'cluster_ucw'"
+                f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep', 'cw', "
+                "'u_cw', or 'cluster_ucw'"
             )
 
         valid_sigreg_inputs = {
@@ -541,11 +566,7 @@ class LeJEPA(Module):
                 f"Unknown apply_sigreg_on={apply_sigreg_on!r}; expected one of "
                 f"{sorted(valid_sigreg_inputs)}."
             )
-        if sigreg == "cluster_ucw" and apply_sigreg_on != "all":
-            raise ValueError(
-                "ClusterUCWReg requires apply_sigreg_on='all' so image-group "
-                "and view membership are preserved."
-            )
+        
         if diagnostics_every_n_steps is not None and diagnostics_every_n_steps <= 0:
             raise ValueError("diagnostics_every_n_steps must be positive or None.")
 
@@ -579,11 +600,7 @@ class LeJEPA(Module):
 
         inv_loss = (global_centers.unsqueeze(0) - all_projected).square().mean()
 
-        if isinstance(sigreg, ClusterUCWReg):
-            if self.apply_sigreg_on != "all":
-                raise RuntimeError(
-                    "ClusterUCWReg requires apply_sigreg_on='all'."
-                )
+        if isinstance(sigreg, ClusterUCWReg) and not isinstance(sigreg, UCWReg):
             sigreg_inputs = all_projected
         elif self.apply_sigreg_on == "all":
             sigreg_inputs = all_projected.flatten(0, 1)

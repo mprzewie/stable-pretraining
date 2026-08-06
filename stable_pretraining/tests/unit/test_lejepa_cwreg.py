@@ -8,6 +8,7 @@ from stable_pretraining.methods.lejepa import (
     ClusterUCWReg,
     LeJEPA,
     SlicedEppsPulley,
+    UCWReg,
 )
 
 pytestmark = pytest.mark.unit
@@ -146,15 +147,36 @@ def test_cluster_ucw_receives_grouped_views_from_lejepa() -> None:
     assert torch.isfinite(projected.grad).all()
 
 
-def test_cluster_ucw_rejects_ungrouped_sigreg_selection() -> None:
+def test_ucw_receives_flattened_views_from_lejepa() -> None:
     model = LeJEPA.__new__(LeJEPA)
     torch.nn.Module.__init__(model)
-    model.apply_sigreg_on = "one_global"
+    model.apply_sigreg_on = "all"
+    projected = torch.randn(4, 8, 16, dtype=torch.float64)
+    regularizer = UCWReg(gamma=0.5)
 
-    with pytest.raises(RuntimeError, match="requires apply_sigreg_on='all'"):
-        model._compute_loss(
-            torch.randn(4, 8, 16),
-            n_global=2,
-            sigreg=ClusterUCWReg(gamma=0.5),
-            lamb=0.02,
+    _, _, actual = model._compute_loss(
+        projected,
+        n_global=2,
+        sigreg=regularizer,
+        lamb=0.02,
+    )
+    expected = regularizer(projected.flatten(0, 1))
+
+    torch.testing.assert_close(actual, expected)
+
+
+def test_cluster_ucw_rejects_ungrouped_sigreg_selection(monkeypatch) -> None:
+    backbone = torch.nn.Identity()
+    backbone.num_features = 16
+    monkeypatch.setattr(
+        "stable_pretraining.methods.lejepa.timm.create_model",
+        lambda *args, **kwargs: backbone,
+    )
+
+    with pytest.raises(ValueError, match="requires apply_sigreg_on='all'"):
+        LeJEPA(
+            encoder_name="unused",
+            projector=torch.nn.Identity(),
+            sigreg="cluster_ucw",
+            apply_sigreg_on="one_global",
         )
