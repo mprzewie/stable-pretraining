@@ -42,7 +42,7 @@ from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
 
 from cw_torch.gamma import silverman_rule_of_thumb
-from cw_torch.metric import cw_normality
+from cw_torch.metric import cw_normality, cw_normality_scale_factor
 
 
 @torch.no_grad()
@@ -299,9 +299,10 @@ class CWReg(nn.Module):
             gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
 
         return 2.0 * math.pi * x.shape[0] * cw_normality(x, gamma)
-    
-class ClusterUCWReg(nn.Module):
-    """Cluster-U Cramér–Wold regularizer toward N(0, I).
+
+
+class ReferenceClusterUCWReg(nn.Module):
+    """Loop-based reference implementation of Cluster-U Cramér-Wold.
 
     Expects representations grouped as [V, B, D]:
         V: views per image
@@ -316,6 +317,14 @@ class ClusterUCWReg(nn.Module):
         self.gamma = gamma
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute Cluster-U through its pooled/within decomposition.
+
+        Args:
+            x: View-major representations with shape ``[V, B, D]``.
+
+        Returns:
+            Scalar Cluster-U Cramér-Wold loss.
+        """
         if x.ndim != 3:
             raise ValueError(
                 f"Expected x with shape [V, B, D], got {tuple(x.shape)}."
@@ -358,6 +367,74 @@ class ClusterUCWReg(nn.Module):
 
         # Preserve the exact external scaling used by CWReg.
         sample_count = num_groups * num_views
+        return 2.0 * math.pi * sample_count * cluster_u_cw
+
+
+class ClusterUCWReg(ReferenceClusterUCWReg):
+    """Condensed-kernel Cluster-U Cramér-Wold regularizer toward N(0, I)."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute Cluster-U without looping over image groups.
+
+        Args:
+            x: View-major representations with shape ``[V, B, D]``.
+
+        Returns:
+            Scalar Cluster-U Cramér-Wold loss.
+        """
+        if x.ndim != 3:
+            raise ValueError(
+                f"Expected x with shape [V, B, D], got {tuple(x.shape)}."
+            )
+
+        num_views, num_groups, feature_dim = x.shape
+        if num_groups < 2:
+            raise ValueError(
+                "Cluster-U requires at least two independent image groups."
+            )
+
+        gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
+        sample_count = num_groups * num_views
+        flat = x.permute(1, 0, 2).reshape(sample_count, feature_dim)
+        k_dim = x.new_tensor(1.0 / (2.0 * feature_dim - 3.0))
+        pairwise_kernel = torch.rsqrt(
+            gamma + k_dim * torch.pdist(flat).square()
+        )
+
+        view_pairs = torch.triu_indices(
+            num_views,
+            num_views,
+            offset=1,
+            device=x.device,
+        )
+        group_offsets = (
+            torch.arange(num_groups, device=x.device, dtype=view_pairs.dtype)
+            * num_views
+        )
+        rows = group_offsets[:, None] + view_pairs[0]
+        columns = group_offsets[:, None] + view_pairs[1]
+        within_indices = (
+            sample_count * rows
+            - rows * (rows + 1) // 2
+            + columns
+            - rows
+            - 1
+        )
+        within_kernel_sum = pairwise_kernel[within_indices.flatten()].sum()
+        cross_group_kernel_sum = pairwise_kernel.sum() - within_kernel_sum
+        cross_group_interactions = (
+            num_groups * (num_groups - 1) * num_views**2
+        )
+        data_data = 2.0 * cross_group_kernel_sum / cross_group_interactions
+
+        squared_norms = flat.square().sum(dim=1)
+        data_target = torch.rsqrt(
+            gamma + 0.5 + k_dim * squared_norms
+        ).mean()
+        target_target = torch.rsqrt(1.0 + gamma)
+        cluster_u_cw = x.new_tensor(cw_normality_scale_factor) * (
+            data_data + target_target - 2.0 * data_target
+        )
         return 2.0 * math.pi * sample_count * cluster_u_cw
 
 
@@ -645,7 +722,11 @@ class LeJEPA(Module):
                 f"or a positive number, got {override_sr_gamma!r}"
             )
     
-        grouped_sigregs = {"cluster_ucw", "random_cluster_ucw"}
+        grouped_sigregs = {
+            "cluster_ucw",
+            "cluster_ucw_reference",
+            "random_cluster_ucw",
+        }
         if sigreg in grouped_sigregs and apply_sigreg_on != "all":
             raise ValueError(
                 f"{sigreg} requires apply_sigreg_on='all' so image-group "
@@ -662,6 +743,8 @@ class LeJEPA(Module):
             self.sigreg = UCWReg(gamma=sr_gamma)
         elif sigreg == "cluster_ucw":
             self.sigreg = ClusterUCWReg(gamma=sr_gamma)
+        elif sigreg == "cluster_ucw_reference":
+            self.sigreg = ReferenceClusterUCWReg(gamma=sr_gamma)
         elif sigreg == "random_cluster_ucw":
             self.sigreg = RandomClusterUCWReg(
                 gamma=sr_gamma,
@@ -670,7 +753,8 @@ class LeJEPA(Module):
         else:
             raise ValueError(
                 f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep', 'cw', "
-                "'u_cw', 'cluster_ucw', or 'random_cluster_ucw'"
+                "'u_cw', 'cluster_ucw', 'cluster_ucw_reference', or "
+                "'random_cluster_ucw'"
             )
 
         valid_sigreg_inputs = {
@@ -720,7 +804,13 @@ class LeJEPA(Module):
         inv_loss = (global_centers.unsqueeze(0) - all_projected).square().mean()
 
         if (
-            isinstance(sigreg, (ClusterUCWReg, RandomClusterUCWReg))
+            isinstance(
+                sigreg,
+                (
+                    ReferenceClusterUCWReg,
+                    RandomClusterUCWReg,
+                ),
+            )
             and not isinstance(sigreg, UCWReg)
         ):
             sigreg_inputs = all_projected

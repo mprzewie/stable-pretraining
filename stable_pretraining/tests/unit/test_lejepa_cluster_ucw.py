@@ -14,7 +14,10 @@ import torch
 
 from cw_torch.metric import cw_normality_scale_factor
 
-from stable_pretraining.methods.lejepa import ClusterUCWReg
+from stable_pretraining.methods.lejepa import (
+    ClusterUCWReg,
+    ReferenceClusterUCWReg,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -119,6 +122,53 @@ def test_cluster_u_matches_explicit_pairwise_gradient() -> None:
         rtol=1e-8,
         atol=1e-9,
     )
+
+
+@pytest.mark.parametrize(
+    ("num_views", "num_groups", "feature_dim"),
+    [
+        (1, 2, 3),
+        (2, 3, 5),
+        (4, 5, 7),
+    ],
+)
+def test_optimized_cluster_u_matches_reference_value(
+    num_views: int,
+    num_groups: int,
+    feature_dim: int,
+) -> None:
+    torch.manual_seed(4321 + num_views + num_groups + feature_dim)
+    x = torch.randn(num_views, num_groups, feature_dim, dtype=torch.float64)
+
+    actual = ClusterUCWReg(gamma=0.5)(x)
+    expected = ReferenceClusterUCWReg(gamma=0.5)(x)
+
+    torch.testing.assert_close(actual, expected, rtol=1e-9, atol=1e-10)
+
+
+def test_optimized_cluster_u_matches_reference_gradient() -> None:
+    torch.manual_seed(2028)
+    x_actual = torch.randn(4, 5, 7, dtype=torch.float64, requires_grad=True)
+    x_expected = x_actual.detach().clone().requires_grad_(True)
+
+    actual = ClusterUCWReg(gamma=0.5)(x_actual)
+    expected = ReferenceClusterUCWReg(gamma=0.5)(x_expected)
+
+    grad_actual = torch.autograd.grad(actual, x_actual)[0]
+    grad_expected = torch.autograd.grad(expected, x_expected)[0]
+
+    torch.testing.assert_close(actual, expected, rtol=1e-9, atol=1e-10)
+    torch.testing.assert_close(grad_actual, grad_expected, rtol=1e-8, atol=1e-9)
+
+
+def test_optimized_cluster_u_matches_reference_in_float32() -> None:
+    torch.manual_seed(2029)
+    x = torch.randn(8, 16, 32)
+
+    actual = ClusterUCWReg(gamma=0.5)(x)
+    expected = ReferenceClusterUCWReg(gamma=0.5)(x)
+
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
 
 
 def test_cluster_u_is_invariant_to_group_and_view_permutations() -> None:
