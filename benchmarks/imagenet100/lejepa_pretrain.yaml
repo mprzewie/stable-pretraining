@@ -69,6 +69,7 @@ module:
     drop_path_rate: ${eval:${oc.env:DROP_PATH_RATE,0.1}}
     sigreg: ${oc.env:SIGREG,ep}
     apply_sigreg_on: ${oc.env:APPLY_SIGREG_ON,all}
+    random_cluster_seed: ${eval:${oc.env:RANDOM_CLUSTER_SEED,0}}
     override_sr_gamma: ${oc.decode:${oc.env:OVERRIDE_SR_GAMMA,null}}
     lamb: ${eval:${oc.env:LAMB,0.02}}
     n_slices: ${eval:${oc.env:N_SLICES,1024}}

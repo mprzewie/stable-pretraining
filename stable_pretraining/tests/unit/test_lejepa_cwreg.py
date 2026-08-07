@@ -7,6 +7,7 @@ from stable_pretraining.methods.lejepa import (
     CWReg,
     ClusterUCWReg,
     LeJEPA,
+    RandomClusterUCWReg,
     SlicedEppsPulley,
     UCWReg,
 )
@@ -147,6 +148,26 @@ def test_cluster_ucw_receives_grouped_views_from_lejepa() -> None:
     assert torch.isfinite(projected.grad).all()
 
 
+def test_random_cluster_ucw_receives_grouped_views_from_lejepa() -> None:
+    model = LeJEPA.__new__(LeJEPA)
+    torch.nn.Module.__init__(model)
+    model.apply_sigreg_on = "all"
+    projected = torch.randn(4, 8, 16, requires_grad=True)
+
+    loss, inv_loss, sigreg_loss = model._compute_loss(
+        projected,
+        n_global=2,
+        sigreg=RandomClusterUCWReg(gamma=0.5),
+        lamb=0.02,
+    )
+    loss.backward()
+
+    assert loss.ndim == inv_loss.ndim == sigreg_loss.ndim == 0
+    assert torch.isfinite(loss)
+    assert projected.grad is not None
+    assert torch.isfinite(projected.grad).all()
+
+
 def test_ucw_receives_flattened_views_from_lejepa() -> None:
     model = LeJEPA.__new__(LeJEPA)
     torch.nn.Module.__init__(model)
@@ -165,7 +186,11 @@ def test_ucw_receives_flattened_views_from_lejepa() -> None:
     torch.testing.assert_close(actual, expected)
 
 
-def test_cluster_ucw_rejects_ungrouped_sigreg_selection(monkeypatch) -> None:
+@pytest.mark.parametrize("sigreg", ["cluster_ucw", "random_cluster_ucw"])
+def test_grouped_ucw_rejects_ungrouped_sigreg_selection(
+    monkeypatch,
+    sigreg: str,
+) -> None:
     backbone = torch.nn.Identity()
     backbone.num_features = 16
     monkeypatch.setattr(
@@ -177,6 +202,6 @@ def test_cluster_ucw_rejects_ungrouped_sigreg_selection(monkeypatch) -> None:
         LeJEPA(
             encoder_name="unused",
             projector=torch.nn.Identity(),
-            sigreg="cluster_ucw",
+            sigreg=sigreg,
             apply_sigreg_on="one_global",
         )

@@ -361,6 +361,114 @@ class ClusterUCWReg(nn.Module):
         return 2.0 * math.pi * sample_count * cluster_u_cw
 
 
+class RandomClusterUCWReg(nn.Module):
+    """Random-cluster control for Cluster-U Cramér-Wold regularization.
+
+    Expects representations grouped as ``[V, B, D]``. Unlike true Cluster-U,
+    the removed within-group interactions come from pseudo-groups containing
+    one representation per view and distinct source images.
+
+    Args:
+        gamma: Cramér-Wold kernel bandwidth.
+        seed: Base seed for reproducible pseudo-groups. Each forward call uses
+            the base seed plus an internal step counter.
+    """
+
+    def __init__(self, gamma: float = 0.5, seed: int = 0):
+        super().__init__()
+        if gamma <= 0:
+            raise ValueError(f"gamma must be positive, got {gamma}.")
+
+        self.gamma = float(gamma)
+        self.seed = int(seed)
+        self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
+
+    def _make_random_groups(self, x: torch.Tensor) -> torch.Tensor:
+        """Construct pseudo-groups with shape ``[B, V, D]``.
+
+        Args:
+            x: View-major representations with shape ``[V, B, D]``.
+
+        Returns:
+            Pseudo-groups containing distinct source images within each group.
+        """
+        if x.ndim != 3:
+            raise ValueError(f"Expected [V, B, D], got {tuple(x.shape)}.")
+
+        num_views, num_groups, _ = x.shape
+        if num_groups < 2:
+            raise ValueError("Need at least two source images.")
+        if num_views > num_groups:
+            raise ValueError(
+                "Cannot construct pseudo-groups with distinct source images "
+                f"when V={num_views} > B={num_groups}."
+            )
+
+        with torch.no_grad():
+            generator = torch.Generator(device=x.device)
+            generator.manual_seed(self.seed + int(self.global_step.item()))
+            base_perm = torch.randperm(
+                num_groups,
+                generator=generator,
+                device=x.device,
+            )
+            offsets = torch.randperm(
+                num_groups,
+                generator=generator,
+                device=x.device,
+            )[:num_views]
+            positions = torch.arange(num_groups, device=x.device)
+            source_indices = torch.stack(
+                [
+                    base_perm[(positions + offsets[view]) % num_groups]
+                    for view in range(num_views)
+                ],
+                dim=0,
+            )
+            view_indices = torch.arange(num_views, device=x.device)[:, None].expand(
+                num_views,
+                num_groups,
+            )
+            self.global_step.add_(1)
+
+        return x[view_indices, source_indices].permute(1, 0, 2).contiguous()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute random-cluster U-CW for grouped representations.
+
+        Args:
+            x: View-major representations with shape ``[V, B, D]``.
+
+        Returns:
+            Scalar random-cluster U-CW loss.
+        """
+        if x.ndim != 3:
+            raise ValueError(f"Expected [V, B, D], got {tuple(x.shape)}.")
+
+        num_views, num_groups, feature_dim = x.shape
+        if num_groups < 2:
+            raise ValueError(
+                "RandomClusterUCWReg requires at least two source images."
+            )
+
+        gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
+        flat = x.permute(1, 0, 2).reshape(
+            num_groups * num_views,
+            feature_dim,
+        )
+        pooled_cw = cw_normality(flat, gamma)
+        pseudo_groups = self._make_random_groups(x)
+        pseudo_within_cw = torch.stack(
+            [cw_normality(group_views, gamma) for group_views in pseudo_groups]
+        ).mean()
+        random_cluster_u_cw = (
+            num_groups * pooled_cw - pseudo_within_cw
+        ) / (num_groups - 1)
+
+        sample_count = num_groups * num_views
+        return 2.0 * math.pi * sample_count * random_cluster_u_cw
+
+
 class UCWReg(ClusterUCWReg):
     """Ordinary sample-level U-statistic CW regularizer.
 
@@ -425,6 +533,8 @@ class LeJEPA(Module):
         ``"all_global"`` uses every global view, and ``"one_global"`` uses
         the first global view.
         The invariance MSE always retains LeJEPA's global-view center.
+    :param random_cluster_seed: Base seed used to construct reproducible random
+        pseudo-groups when ``sigreg="random_cluster_ucw"``.
     :param diagnostics_every_n_steps: Compute lightweight Anchor-CW diagnostics
         every given number of training steps. ``None`` disables diagnostics.
     :param diagnostics_compute_spectrum: Include effective/stable anchor ranks
@@ -479,6 +589,7 @@ class LeJEPA(Module):
         drop_path_rate: float = 0.1,
         sigreg: str = "ep",
         apply_sigreg_on: str = "all",
+        random_cluster_seed: int = 0,
         override_sr_gamma: float | str | None = None,
         diagnostics_every_n_steps: int | None = None,
         diagnostics_compute_spectrum: bool = False,
@@ -534,6 +645,13 @@ class LeJEPA(Module):
                 f"or a positive number, got {override_sr_gamma!r}"
             )
     
+        grouped_sigregs = {"cluster_ucw", "random_cluster_ucw"}
+        if sigreg in grouped_sigregs and apply_sigreg_on != "all":
+            raise ValueError(
+                f"{sigreg} requires apply_sigreg_on='all' so image-group "
+                "and view membership are preserved."
+            )
+
         if sigreg == "ep":
             self.sigreg = SlicedEppsPulley(
                 num_slices=n_slices, t_max=t_max, n_points=n_points, gamma=sr_gamma
@@ -544,14 +662,15 @@ class LeJEPA(Module):
             self.sigreg = UCWReg(gamma=sr_gamma)
         elif sigreg == "cluster_ucw":
             self.sigreg = ClusterUCWReg(gamma=sr_gamma)
-            assert apply_sigreg_on == "all", (
-                "ClusterUCWReg requires apply_sigreg_on='all' so image-group "
-                "and view membership are preserved."
+        elif sigreg == "random_cluster_ucw":
+            self.sigreg = RandomClusterUCWReg(
+                gamma=sr_gamma,
+                seed=random_cluster_seed,
             )
         else:
             raise ValueError(
                 f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep', 'cw', "
-                "'u_cw', or 'cluster_ucw'"
+                "'u_cw', 'cluster_ucw', or 'random_cluster_ucw'"
             )
 
         valid_sigreg_inputs = {
@@ -600,7 +719,10 @@ class LeJEPA(Module):
 
         inv_loss = (global_centers.unsqueeze(0) - all_projected).square().mean()
 
-        if isinstance(sigreg, ClusterUCWReg) and not isinstance(sigreg, UCWReg):
+        if (
+            isinstance(sigreg, (ClusterUCWReg, RandomClusterUCWReg))
+            and not isinstance(sigreg, UCWReg)
+        ):
             sigreg_inputs = all_projected
         elif self.apply_sigreg_on == "all":
             sigreg_inputs = all_projected.flatten(0, 1)
