@@ -1,8 +1,8 @@
 """LeJEPA ViT-Base on ImageNet-10 (Imagenette).
 
 Multi-view invariance + Epps-Pulley goodness-of-fit (SIGReg).
-Uses 2 global views (224x224) + 6 local views (96x96) matching
-the official LeJEPA augmentation strategy.
+Uses 2 global views (224x224) and a configurable number of local views
+(96x96). The default of 6 local views matches the LeJEPA augmentation recipe.
 """
 
 import os
@@ -156,18 +156,17 @@ def main():
     warmup_epochs = float(os.environ.get("WARMUP_EPOCHS", "10"))
     end_lr_divisor = float(os.environ.get("END_LR_DIVISOR", "1000"))
     global_views = 2
-    all_views = 8
+    local_views = int(os.environ.get("NUM_LOCAL_VIEWS", "6"))
+    if local_views < 0:
+        raise ValueError("NUM_LOCAL_VIEWS must be non-negative.")
+    all_views = global_views + local_views
 
     data_dir = str(get_data_dir("imagenet10"))
 
-    # 2 global views (blur p=1.0, p=0.1) + 6 local views
     train_transform = transforms.MultiViewTransform(
         {
             **{f"global_{i}": _global_transform() for i in range(global_views)},
-            **{
-                f"local_{i}": _local_transform()
-                for i in range(all_views - global_views)
-            },
+            **{f"local_{i}": _local_transform() for i in range(local_views)},
         }
     )
 
@@ -214,6 +213,7 @@ def main():
         n_points=int(os.environ.get("N_POINTS", "17")),
         sigreg=os.environ.get("SIGREG", "ep"),
         apply_sigreg_on=os.environ.get("APPLY_SIGREG_ON", "all"),
+        random_cluster_seed=int(os.environ.get("RANDOM_CLUSTER_SEED", "0")),
         override_sr_gamma=_optional_float_or_str_env("OVERRIDE_SR_GAMMA"),
     )
 
@@ -251,9 +251,13 @@ def main():
             "seed": seed,
             "batch_size": batch_size,
             "num_global_views": global_views,
-            "num_local_views": all_views - global_views,
+            "num_local_views": local_views,
+            "num_views": all_views,
             "lejepa.sigreg": os.environ.get("SIGREG", "ep"),
             "lejepa.apply_sigreg_on": os.environ.get("APPLY_SIGREG_ON", "all"),
+            "lejepa.random_cluster_seed": int(
+                os.environ.get("RANDOM_CLUSTER_SEED", "0")
+            ),
             "lejepa.gamma": os.environ.get("OVERRIDE_SR_GAMMA", "method_default"),
             "lejepa.lambda": float(os.environ.get("LAMB", "0.02")),
             "lejepa.n_slices": int(os.environ.get("N_SLICES", "1024")),

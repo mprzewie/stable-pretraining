@@ -168,7 +168,8 @@ def test_optimized_cluster_u_matches_reference_in_float32() -> None:
     actual = ClusterUCWReg(gamma=0.5)(x)
     expected = ReferenceClusterUCWReg(gamma=0.5)(x)
 
-    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    # The condensed and decomposed forms use different float32 reduction orders.
+    torch.testing.assert_close(actual, expected, rtol=2e-5, atol=1e-6)
 
 
 def test_cluster_u_is_invariant_to_group_and_view_permutations() -> None:

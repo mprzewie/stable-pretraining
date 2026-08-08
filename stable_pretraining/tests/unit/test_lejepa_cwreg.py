@@ -169,6 +169,27 @@ def test_random_cluster_ucw_receives_grouped_views_from_lejepa() -> None:
     assert torch.isfinite(projected.grad).all()
 
 
+def test_lejepa_supports_two_global_views_without_local_views(monkeypatch) -> None:
+    backbone = torch.nn.Flatten(start_dim=1)
+    backbone.num_features = 12
+    monkeypatch.setattr(
+        "stable_pretraining.methods.lejepa.timm.create_model",
+        lambda *args, **kwargs: backbone,
+    )
+    model = LeJEPA(
+        encoder_name="unused",
+        projector=torch.nn.Identity(),
+        sigreg="cw",
+    ).train()
+    global_views = [torch.randn(4, 3, 2, 2), torch.randn(4, 3, 2, 2)]
+
+    output = model(global_views=global_views, local_views=[])
+
+    assert output.loss.ndim == 0
+    assert output.embedding.shape == (8, 12)
+    assert torch.isfinite(output.loss)
+
+
 def test_ucw_receives_flattened_views_from_lejepa() -> None:
     model = LeJEPA.__new__(LeJEPA)
     torch.nn.Module.__init__(model)

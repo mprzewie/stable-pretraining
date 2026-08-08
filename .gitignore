@@ -169,6 +169,7 @@ scripts/
 *.ckpt
 *.pt
 *.out
+.slurm-submit/
 .vscode/launch.json
 *.lock
 

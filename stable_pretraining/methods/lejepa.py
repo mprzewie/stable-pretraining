@@ -869,9 +869,11 @@ class LeJEPA(Module):
             )
 
             g_features = self.backbone(torch.cat(global_views))
-            l_features = self.backbone(torch.cat(local_views))
-
-            all_features = torch.cat([g_features, l_features])
+            if local_views:
+                l_features = self.backbone(torch.cat(local_views))
+                all_features = torch.cat([g_features, l_features])
+            else:
+                all_features = g_features
             all_projected = self.projector(all_features)
 
             bs = global_views[0].shape[0]
