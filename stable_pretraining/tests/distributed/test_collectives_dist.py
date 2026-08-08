@@ -25,6 +25,13 @@ class TestCollectives:
     def test_all_reduce_sums(self):
         H.run_distributed(H.w_all_reduce_sum, world_size=2, backend="gloo")
 
+    def test_cw_regularizers_match_global_batch(self):
+        H.run_distributed(
+            H.w_cw_regularizers_match_global_batch,
+            world_size=2,
+            backend="gloo",
+        )
+
     def test_barlow_twins_matches_single_process(self):
         H.run_distributed(H.w_barlow_matches_single_proc, world_size=2, backend="gloo")
 

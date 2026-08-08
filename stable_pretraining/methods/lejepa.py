@@ -40,9 +40,26 @@ from torch.distributed.nn import all_reduce
 
 from stable_pretraining import Module
 from stable_pretraining.backbone import MLP
+from stable_pretraining.utils.distributed import all_gather
 
 from cw_torch.gamma import silverman_rule_of_thumb
 from cw_torch.metric import cw_normality, cw_normality_scale_factor
+
+
+def _gather_cw_inputs(x: torch.Tensor, dim: int) -> torch.Tensor:
+    """Gather CW samples across ranks while preserving autograd.
+
+    Args:
+        x: Rank-local CW inputs.
+        dim: Sample/group dimension along which ranks are concatenated.
+
+    Returns:
+        Global CW inputs, or ``x`` itself outside distributed execution.
+    """
+    gathered = all_gather(x)
+    if len(gathered) == 1:
+        return x
+    return torch.cat(gathered, dim=dim)
 
 
 @torch.no_grad()
@@ -290,6 +307,7 @@ class CWReg(nn.Module):
         self.gamma = gamma
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = _gather_cw_inputs(x, dim=0)
         if self.gamma is None:
             gamma = silverman_rule_of_thumb(
                 sample_stddev=1.0,
@@ -329,6 +347,8 @@ class ReferenceClusterUCWReg(nn.Module):
             raise ValueError(
                 f"Expected x with shape [V, B, D], got {tuple(x.shape)}."
             )
+
+        x = _gather_cw_inputs(x, dim=1)
 
         num_views, num_groups, feature_dim = x.shape
 
@@ -386,6 +406,8 @@ class ClusterUCWReg(ReferenceClusterUCWReg):
             raise ValueError(
                 f"Expected x with shape [V, B, D], got {tuple(x.shape)}."
             )
+
+        x = _gather_cw_inputs(x, dim=1)
 
         num_views, num_groups, feature_dim = x.shape
         if num_groups < 2:
@@ -521,6 +543,8 @@ class RandomClusterUCWReg(nn.Module):
         """
         if x.ndim != 3:
             raise ValueError(f"Expected [V, B, D], got {tuple(x.shape)}.")
+
+        x = _gather_cw_inputs(x, dim=1)
 
         num_views, num_groups, feature_dim = x.shape
         if num_groups < 2:

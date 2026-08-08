@@ -547,6 +547,82 @@ def w_all_reduce_sum(rank, world_size):
     assert torch.allclose(out, torch.tensor([expected])), (out, expected)
 
 
+def w_cw_regularizers_match_global_batch(rank, world_size):
+    """CW and Cluster-U gather rank-local samples before evaluation."""
+    import math
+
+    from cw_torch.metric import cw_normality, cw_normality_scale_factor
+
+    from stable_pretraining.methods.lejepa import CWReg, ClusterUCWReg
+
+    gamma = torch.tensor(0.5, dtype=torch.float64)
+    local = (
+        torch.arange(24, dtype=torch.float64).reshape(2, 3, 4) / 10.0
+        + rank * 3.0
+    ).requires_grad_(True)
+    global_grouped = torch.cat(
+        [
+            torch.arange(24, dtype=torch.float64).reshape(2, 3, 4) / 10.0
+            + source_rank * 3.0
+            for source_rank in range(world_size)
+        ],
+        dim=1,
+    )
+
+    local_flat = local.flatten(0, 1)
+    global_flat = torch.cat(
+        [
+            (
+                torch.arange(24, dtype=torch.float64).reshape(2, 3, 4) / 10.0
+                + source_rank * 3.0
+            ).flatten(0, 1)
+            for source_rank in range(world_size)
+        ],
+        dim=0,
+    )
+    cw_actual = CWReg(gamma=0.5)(local_flat)
+    cw_expected = (
+        2.0
+        * math.pi
+        * global_flat.shape[0]
+        * cw_normality(global_flat, gamma)
+    )
+    assert torch.allclose(cw_actual, cw_expected, rtol=1e-10, atol=1e-11), (
+        cw_actual,
+        cw_expected,
+    )
+
+    cluster_actual = ClusterUCWReg(gamma=0.5)(local)
+    num_views, num_groups, feature_dim = global_grouped.shape
+    flat = global_grouped.permute(1, 0, 2).reshape(-1, feature_dim)
+    group_ids = torch.arange(num_groups).repeat_interleave(num_views)
+    squared_distances = torch.cdist(flat, flat).square()
+    k_dim = global_grouped.new_tensor(1.0 / (2.0 * feature_dim - 3.0))
+    kernel = torch.rsqrt(gamma + k_dim * squared_distances)
+    data_data = kernel[group_ids[:, None] != group_ids[None, :]].mean()
+    data_target = torch.rsqrt(
+        gamma + 0.5 + k_dim * flat.square().sum(dim=1)
+    ).mean()
+    cluster_expected = (
+        2.0
+        * math.pi
+        * num_groups
+        * num_views
+        * global_grouped.new_tensor(cw_normality_scale_factor)
+        * (data_data + torch.rsqrt(1.0 + gamma) - 2.0 * data_target)
+    )
+    assert torch.allclose(
+        cluster_actual,
+        cluster_expected,
+        rtol=1e-10,
+        atol=1e-11,
+    ), (cluster_actual, cluster_expected)
+
+    (cw_actual + cluster_actual).backward()
+    assert local.grad is not None
+    assert torch.isfinite(local.grad).all()
+
+
 def w_barlow_matches_single_proc(rank, world_size):
     """With identical data on every rank, Barlow loss == single-process loss.
 
