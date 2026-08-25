@@ -75,6 +75,10 @@ module:
     n_slices: ${eval:${oc.env:N_SLICES,1024}}
     n_points: ${eval:${oc.env:N_POINTS,17}}
     t_max: ${eval:${oc.env:T_MAX,3.0}}
+    subsampled_cw_num_pairs: ${oc.decode:${oc.env:SUBSAMPLED_CW_NUM_PAIRS,null}}
+    subsampled_cw_pairs_per_sample: ${oc.decode:${oc.env:SUBSAMPLED_CW_PAIRS_PER_SAMPLE,null}}
+    subsampled_cw_seed: ${oc.decode:${oc.env:SUBSAMPLED_CW_SEED,null}}
+    subsampled_cw_pair_chunk_size: ${eval:${oc.env:SUBSAMPLED_CW_PAIR_CHUNK_SIZE,65536}}
   optim:
     optimizer:
       type: AdamW

@@ -12,7 +12,7 @@ from .igpt import iGPT
 from .ijepa import IJEPA
 from .joint_cw import JointCW
 from .mae import MAE
-from .lejepa import LeJEPA
+from .lejepa import LeJEPA, PermutationSubsampledCWReg, SubsampledCWReg
 from .maskfeat import MaskFeat
 from .mim_refiner import MIMRefiner
 from .mocov2 import MoCov2
@@ -51,6 +51,8 @@ __all__ = [
     "JointCW",
     "MAE",
     "LeJEPA",
+    "PermutationSubsampledCWReg",
+    "SubsampledCWReg",
     "MaskFeat",
     "MIMRefiner",
     "MoCov2",

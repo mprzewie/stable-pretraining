@@ -319,6 +319,272 @@ class CWReg(nn.Module):
         return 2.0 * math.pi * x.shape[0] * cw_normality(x, gamma)
 
 
+class SubsampledCWReg(nn.Module):
+    """Unbiased pair-subsampled approximation of :class:`CWReg`.
+
+    Only the off-diagonal data-data V-statistic term is sampled. The diagonal,
+    data-to-Gaussian, Gaussian-to-Gaussian, and production scaling terms remain
+    exact.
+
+    Args:
+        gamma: Cramer-Wold kernel bandwidth. ``None`` uses the same Silverman
+            rule as :class:`CWReg`.
+        num_pairs: Number of ordered off-diagonal pairs sampled per call.
+        pairs_per_sample: Pair budget per input sample. The resulting budget is
+            ``N * pairs_per_sample``.
+        seed: Optional base seed for a reproducible sequence of forward calls.
+            By default, sampling uses the ordinary torch RNG.
+        pair_chunk_size: Maximum sampled pairs evaluated at once.
+    """
+
+    def __init__(
+        self,
+        gamma: float | None = None,
+        *,
+        num_pairs: int | None = None,
+        pairs_per_sample: int | None = None,
+        seed: int | None = None,
+        pair_chunk_size: int = 65536,
+    ):
+        super().__init__()
+        if num_pairs is not None and pairs_per_sample is not None:
+            raise ValueError("Specify only one of num_pairs and pairs_per_sample.")
+        if num_pairs is None and pairs_per_sample is None:
+            pairs_per_sample = 16
+        if num_pairs is not None and num_pairs <= 0:
+            raise ValueError("num_pairs must be positive.")
+        if pairs_per_sample is not None and pairs_per_sample <= 0:
+            raise ValueError("pairs_per_sample must be positive.")
+        if pair_chunk_size <= 0:
+            raise ValueError("pair_chunk_size must be positive.")
+
+        self.gamma = gamma
+        self.num_pairs = num_pairs
+        self.pairs_per_sample = pairs_per_sample
+        self.seed = seed
+        self.pair_chunk_size = pair_chunk_size
+        self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
+
+    def _pair_count(self, sample_count: int) -> int:
+        if self.num_pairs is not None:
+            return self.num_pairs
+        assert self.pairs_per_sample is not None
+        return sample_count * self.pairs_per_sample
+
+    def _generator(self, x: torch.Tensor) -> torch.Generator | None:
+        if self.seed is None:
+            return None
+        generator = torch.Generator(device=x.device)
+        generator.manual_seed(self.seed + int(self.global_step.item()))
+        self.global_step.add_(1)
+        return generator
+
+    def _off_diagonal_kernel_mean(
+        self,
+        x: torch.Tensor,
+        gamma: torch.Tensor,
+        kernel_dim_scale: torch.Tensor,
+        generator: torch.Generator | None,
+    ) -> torch.Tensor:
+        sample_count = x.shape[0]
+        pair_count = self._pair_count(sample_count)
+        sampled_kernel_sum = x.new_zeros(())
+        remaining = pair_count
+        while remaining > 0:
+            chunk_size = min(remaining, self.pair_chunk_size)
+            left = torch.randint(
+                sample_count,
+                (chunk_size,),
+                device=x.device,
+                generator=generator,
+            )
+            reduced_right = torch.randint(
+                sample_count - 1,
+                (chunk_size,),
+                device=x.device,
+                generator=generator,
+            )
+            right = reduced_right + (reduced_right >= left)
+            squared_distances = (x[left] - x[right]).square().sum(dim=-1)
+            sampled_kernel_sum = sampled_kernel_sum + torch.rsqrt(
+                gamma + kernel_dim_scale * squared_distances
+            ).sum()
+            remaining -= chunk_size
+        return sampled_kernel_sum / pair_count
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """Evaluate the pair-subsampled production CW objective.
+
+        Args:
+            x: Samples with shape ``[N, D]``.
+            generator: Optional torch generator controlling pair sampling.
+
+        Returns:
+            Scalar regularization loss with the same scaling as :class:`CWReg`.
+        """
+        if x.ndim != 2:
+            raise ValueError(f"Expected x with shape [N, D], got {tuple(x.shape)}.")
+
+        x = _gather_cw_inputs(x, dim=0)
+        sample_count, feature_dim = x.shape
+        if sample_count < 2:
+            raise ValueError("SubsampledCWReg requires at least two samples.")
+
+        if self.gamma is None:
+            gamma = silverman_rule_of_thumb(
+                sample_stddev=1.0,
+                sample_count=sample_count,
+            ).to(device=x.device, dtype=x.dtype)
+        else:
+            gamma = torch.as_tensor(self.gamma, device=x.device, dtype=x.dtype)
+
+        if generator is None:
+            generator = self._generator(x)
+
+        kernel_dim_scale = x.new_tensor(1.0 / (2.0 * feature_dim - 3.0))
+        off_diagonal_mean = self._off_diagonal_kernel_mean(
+            x, gamma, kernel_dim_scale, generator
+        )
+        diagonal_kernel = torch.rsqrt(
+            gamma + kernel_dim_scale * x.new_zeros(())
+        )
+        data_data = (
+            diagonal_kernel / sample_count
+            + (sample_count - 1.0) / sample_count * off_diagonal_mean
+        )
+
+        squared_norms = x.square().sum(dim=-1)
+        data_target = torch.rsqrt(
+            gamma + 0.5 + kernel_dim_scale * squared_norms
+        ).mean()
+        target_target = torch.rsqrt(1.0 + gamma)
+        normality = x.new_tensor(cw_normality_scale_factor) * (
+            data_data + target_target - 2.0 * data_target
+        )
+        return 2.0 * math.pi * sample_count * normality
+
+
+class PermutationSubsampledCWReg(SubsampledCWReg):
+    """Degree-balanced pair-subsampled approximation of :class:`CWReg`.
+
+    A random ordering is sampled once per call. Each of
+    ``R = pairs_per_sample`` rounds connects that ordering to an independently
+    sampled nonzero cyclic shift. Every sample is therefore incident to exactly
+    two directed edges per round: one outgoing and one incoming. Each ordered
+    off-diagonal pair has equal marginal probability, so the estimator remains
+    unbiased while removing random sampled-degree variation.
+
+    Args:
+        gamma: Cramer-Wold kernel bandwidth. ``None`` uses the same Silverman
+            rule as :class:`CWReg`.
+        pairs_per_sample: Number of random permutation rounds.
+        seed: Optional base seed for a reproducible sequence of forward calls.
+        pair_chunk_size: Maximum number of pair indices materialized at once.
+    """
+
+    def __init__(
+        self,
+        gamma: float | None = None,
+        *,
+        pairs_per_sample: int = 16,
+        seed: int | None = None,
+        pair_chunk_size: int = 65536,
+    ):
+        super().__init__(
+            gamma=gamma,
+            pairs_per_sample=pairs_per_sample,
+            seed=seed,
+            pair_chunk_size=pair_chunk_size,
+        )
+
+    @staticmethod
+    def _matching_plan(
+        sample_count: int,
+        rounds: int,
+        device: torch.device,
+        generator: torch.Generator | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        permutation = torch.randperm(
+            sample_count, device=device, generator=generator
+        )
+        shifts = torch.randint(
+            1,
+            sample_count,
+            (rounds, 1),
+            device=device,
+            generator=generator,
+        )
+        return permutation, shifts
+
+    @staticmethod
+    def _indices_from_plan(
+        permutation: torch.Tensor,
+        shifts: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        sample_count = permutation.numel()
+        right_positions = (
+            torch.arange(sample_count, device=permutation.device).unsqueeze(0)
+            + shifts
+        ) % sample_count
+        left = permutation.expand(shifts.shape[0], -1)
+        right = permutation[right_positions]
+        return left.reshape(-1), right.reshape(-1)
+
+    @classmethod
+    def _matching_indices(
+        cls,
+        sample_count: int,
+        rounds: int,
+        device: torch.device,
+        generator: torch.Generator | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return cls._indices_from_plan(
+            *cls._matching_plan(sample_count, rounds, device, generator)
+        )
+
+    def _off_diagonal_kernel_mean(
+        self,
+        x: torch.Tensor,
+        gamma: torch.Tensor,
+        kernel_dim_scale: torch.Tensor,
+        generator: torch.Generator | None,
+    ) -> torch.Tensor:
+        sample_count = x.shape[0]
+        assert self.pairs_per_sample is not None
+        rounds_per_chunk = max(1, self.pair_chunk_size // sample_count)
+        permutation, shifts = self._matching_plan(
+            sample_count,
+            self.pairs_per_sample,
+            x.device,
+            generator,
+        )
+        ordered_x = x[permutation]
+        positions = torch.arange(sample_count, device=x.device).unsqueeze(0)
+        sampled_kernel_sum = x.new_zeros(())
+        completed_rounds = 0
+        while completed_rounds < self.pairs_per_sample:
+            rounds = min(
+                rounds_per_chunk, self.pairs_per_sample - completed_rounds
+            )
+            chunk_shifts = shifts[
+                completed_rounds : completed_rounds + rounds
+            ]
+            right_positions = (positions + chunk_shifts) % sample_count
+            squared_distances = (
+                ordered_x.unsqueeze(0) - ordered_x[right_positions]
+            ).square().sum(dim=-1)
+            sampled_kernel_sum = sampled_kernel_sum + torch.rsqrt(
+                gamma + kernel_dim_scale * squared_distances
+            ).sum()
+            completed_rounds += rounds
+        return sampled_kernel_sum / (sample_count * self.pairs_per_sample)
+
+
 class ReferenceClusterUCWReg(nn.Module):
     """Loop-based reference implementation of Cluster-U Cramér-Wold.
 
@@ -636,6 +902,14 @@ class LeJEPA(Module):
         The invariance MSE always retains LeJEPA's global-view center.
     :param random_cluster_seed: Base seed used to construct reproducible random
         pseudo-groups when ``sigreg="random_cluster_ucw"``.
+    :param subsampled_cw_num_pairs: Fixed ordered-pair budget used when
+        ``sigreg="subsampled_cw"``.
+    :param subsampled_cw_pairs_per_sample: Ordered-pair budget per regularizer
+        input sample used when ``sigreg="subsampled_cw"`` or
+        ``sigreg="permutation_subsampled_cw"``.
+    :param subsampled_cw_seed: Optional deterministic sampling-sequence seed.
+    :param subsampled_cw_pair_chunk_size: Maximum sampled pairs materialized at
+        once.
     :param diagnostics_every_n_steps: Compute lightweight Anchor-CW diagnostics
         every given number of training steps. ``None`` disables diagnostics.
     :param diagnostics_compute_spectrum: Include effective/stable anchor ranks
@@ -691,6 +965,10 @@ class LeJEPA(Module):
         sigreg: str = "ep",
         apply_sigreg_on: str = "all",
         random_cluster_seed: int = 0,
+        subsampled_cw_num_pairs: int | None = None,
+        subsampled_cw_pairs_per_sample: int | None = None,
+        subsampled_cw_seed: int | None = None,
+        subsampled_cw_pair_chunk_size: int = 65536,
         override_sr_gamma: float | str | None = None,
         diagnostics_every_n_steps: int | None = None,
         diagnostics_compute_spectrum: bool = False,
@@ -763,6 +1041,30 @@ class LeJEPA(Module):
             )
         elif sigreg == "cw":
             self.sigreg = CWReg(gamma=sr_gamma)
+        elif sigreg == "subsampled_cw":
+            self.sigreg = SubsampledCWReg(
+                gamma=sr_gamma,
+                num_pairs=subsampled_cw_num_pairs,
+                pairs_per_sample=subsampled_cw_pairs_per_sample,
+                seed=subsampled_cw_seed,
+                pair_chunk_size=subsampled_cw_pair_chunk_size,
+            )
+        elif sigreg == "permutation_subsampled_cw":
+            if subsampled_cw_num_pairs is not None:
+                raise ValueError(
+                    "permutation_subsampled_cw uses "
+                    "subsampled_cw_pairs_per_sample as its integer round count."
+                )
+            self.sigreg = PermutationSubsampledCWReg(
+                gamma=sr_gamma,
+                pairs_per_sample=(
+                    16
+                    if subsampled_cw_pairs_per_sample is None
+                    else subsampled_cw_pairs_per_sample
+                ),
+                seed=subsampled_cw_seed,
+                pair_chunk_size=subsampled_cw_pair_chunk_size,
+            )
         elif sigreg == "u_cw":
             self.sigreg = UCWReg(gamma=sr_gamma)
         elif sigreg == "cluster_ucw":
@@ -777,6 +1079,7 @@ class LeJEPA(Module):
         else:
             raise ValueError(
                 f"Unknown LeJEPA sigreg={sigreg!r}; expected 'ep', 'cw', "
+                "'subsampled_cw', 'permutation_subsampled_cw', "
                 "'u_cw', 'cluster_ucw', 'cluster_ucw_reference', or "
                 "'random_cluster_ucw'"
             )

@@ -1,0 +1,16 @@
+defaults:
+  - lejepa_pretrain
+  - _self_
+
+lejepa_gpu_transform:
+  groups:
+    local:
+      names:
+        - local_1
+        - local_2
+        - local_3
+        - local_4
+        - local_5
+        - local_6
+        - local_7
+        - local_8

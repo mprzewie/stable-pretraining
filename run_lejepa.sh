@@ -142,6 +142,10 @@ export LAMB="${LAMB:-0.02}"
 export N_SLICES="${N_SLICES:-1024}"
 export N_POINTS="${N_POINTS:-17}"
 export T_MAX="${T_MAX:-3.0}"
+export SUBSAMPLED_CW_NUM_PAIRS="${SUBSAMPLED_CW_NUM_PAIRS:-null}"
+export SUBSAMPLED_CW_PAIRS_PER_SAMPLE="${SUBSAMPLED_CW_PAIRS_PER_SAMPLE:-null}"
+export SUBSAMPLED_CW_SEED="${SUBSAMPLED_CW_SEED:-null}"
+export SUBSAMPLED_CW_PAIR_CHUNK_SIZE="${SUBSAMPLED_CW_PAIR_CHUNK_SIZE:-65536}"
 
 # MultiCW loss. Select it with:
 #   METHOD=multicw STAGE=pretrain ./run_lejepa.sh
