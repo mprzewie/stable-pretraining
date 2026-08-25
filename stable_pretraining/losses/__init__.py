@@ -18,6 +18,7 @@ from .joint_embedding import (
     NTXEntLoss,
     SwAVLoss,
 )
+from .laphorn_swav import LaphornSwAVLoss
 
 # Multimodal losses
 from .multimodal import CLIPLoss
@@ -44,6 +45,7 @@ __all__ = [
     "BarlowTwinsLoss",
     "NTXEntLoss",
     "SwAVLoss",
+    "LaphornSwAVLoss",
     "CLIPLoss",
     # Reconstruction
     "mae",

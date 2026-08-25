@@ -203,6 +203,21 @@ def test_swav_forward_backward_multicrop():
     _assert_loss_and_backward(model, output)
 
 
+def test_laphorn_swav_forward_backward_two_view():
+    """LaPHorn SwAV replaces the assignment operator without breaking training."""
+    model = M.LaphornSwAV(
+        encoder_name=TINY_VIT,
+        projector_dims=(256, 64),
+        n_prototypes=64,
+        laphorn_h=0.3,
+        dynamic_img_size=True,
+    )
+    model.train()
+    v1, v2 = _two_views()
+    output = model(v1, v2)
+    _assert_loss_and_backward(model, output)
+
+
 def test_ijepa_forward_backward():
     model = M.IJEPA(
         model_or_model_name=TINY_VIT,

@@ -11,6 +11,7 @@ Available forward functions:
     - ``vicreg`` — VICReg variance-invariance-covariance regularization
     - ``barlow_twins`` — Barlow Twins cross-correlation alignment
     - ``swav`` — SwAV online clustering
+    - ``laphorn_swav`` — SwAV with one-pass LaPHorn assignments
     - ``nnclr`` — NNCLR nearest-neighbor contrastive learning
     - ``dino`` — DINO self-distillation with multi-crop
     - ``dinov2`` — DINOv2 with iBOT masked patch prediction
@@ -609,6 +610,26 @@ def swav(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
             out["label"] = batch["label"]
 
     return out
+
+
+def laphorn_swav(self, batch: dict[str, Any], stage: str) -> dict[str, torch.Tensor]:
+    """Forward function for SwAV with LaPHorn prototype assignments.
+
+    Args:
+        self: A :class:`stable_pretraining.Module` configured with the usual
+            SwAV components and a ``LaphornSwAVLoss`` as ``swav_loss``.
+        batch: Multi-view batch dictionary.
+        stage: Trainer stage, such as ``"train"`` or ``"val"``.
+
+    Returns:
+        The standard SwAV output dictionary containing embeddings and, during
+        training, the swapped-prediction loss.
+
+    Note:
+        Queue behavior and output keys are identical to :func:`swav`; only the
+        assignment operator supplied by the loss differs.
+    """
+    return swav(self, batch, stage)
 
 
 def _find_nearest_neighbors(query, support_set):

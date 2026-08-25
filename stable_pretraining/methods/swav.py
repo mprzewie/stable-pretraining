@@ -148,7 +148,7 @@ class SwAV(Module):
 
         # Sinkhorn assignments (no_grad) for every view independently.
         with torch.no_grad():
-            qs = [self.swav_loss.sinkhorn(s) for s in scores]
+            qs = [self.swav_loss.assignments(s) for s in scores]
 
         # Swapped-prediction loss across all unordered (global, other) pairs.
         loss = 0.0

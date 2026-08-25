@@ -182,18 +182,22 @@ class SwAVLoss(torch.nn.Module):
             if queue_feats is not None:
                 combined_feats = torch.cat([proj1, proj2, queue_feats])
                 combined_scores = prototypes(combined_feats)
-                all_q = self.sinkhorn(combined_scores)
+                all_q = self.assignments(combined_scores)
                 q1 = all_q[: proj1.shape[0]]
                 q2 = all_q[proj1.shape[0] : proj1.shape[0] * 2]
             else:
                 batch_scores = torch.cat([scores1, scores2])
-                all_q = self.sinkhorn(batch_scores)
+                all_q = self.assignments(batch_scores)
                 q1, q2 = all_q.chunk(2)
 
         loss = self.swapped_prediction(scores1, q2) + self.swapped_prediction(
             scores2, q1
         )
         return loss / 2.0
+
+    def assignments(self, scores):
+        """Compute balanced per-sample prototype assignments."""
+        return self.sinkhorn(scores)
 
     def swapped_prediction(self, scores, q):
         """Computes the cross-entropy loss for the swapped prediction task."""
